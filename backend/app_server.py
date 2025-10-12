@@ -18,8 +18,11 @@ import openvino as ov
 
 # --- MODIFICATION START ---
 # Point Flask to the 'build' directory for serving the frontend
-app = Flask(__name__, static_folder='../build', static_url_path='/')
+#app = Flask(__name__, static_folder='../build', static_url_path='/')
 # --- MODIFICATION END ---
+
+# Point Flask to the 'build' directory for serving the frontend(local development)
+app = Flask(__name__, static_folder='../frontend/build', static_url_path='/')
 
 CORS(app)
 
