@@ -7,14 +7,13 @@ COPY frontend/ ./
 RUN npm run build
 
 # Stage 2: Setup the Python backend with NVIDIA CUDA 12.9.0 support
-# Using the specific base image requested by the user
 FROM nvidia/cuda:12.9.0-runtime-ubuntu22.04
 
 # Set environment variables
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 
-# Install Python, pip, and essential libraries for OpenCV and dlib
+# Install Python, pip, and essential libraries
 RUN apt-get update && apt-get install -y \
     python3.10 \
     python3-pip \
@@ -30,7 +29,10 @@ WORKDIR /app
 # Copy the requirements file
 COPY backend/requirements.txt .
 
-# Install all Python dependencies from the requirements file
+# Install PyTorch, Torchvision, and Torchaudio from the specific CUDA 12.9 index
+RUN pip3 install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu129
+
+# Install the rest of the Python dependencies from the requirements file
 RUN pip3 install --no-cache-dir -r requirements.txt
 
 # Copy the backend application and model
