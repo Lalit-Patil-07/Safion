@@ -26,5 +26,4 @@ yarn-debug.log*
 yarn-error.log*
 
 # Docker ignore (already handled by .dockerignore, but good practice)
-Dockerfile
 .dockerignore
