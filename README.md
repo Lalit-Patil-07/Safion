@@ -1,4 +1,3 @@
-````markdown
 # Safion - PPE Detection System
 
 Safion is a real-time Personal Protective Equipment (PPE) detection system designed to enhance workplace safety. It uses a deep learning model to monitor video streams from various sources, detect PPE compliance (hardhats, masks, safety vests), and log violations for review.
@@ -32,39 +31,39 @@ The easiest way to get Safion running is by using the pre-built Docker image fro
 
 ### Option 1: Run with Docker (Recommended)
 
-1.  **Pull the Docker image:**
-    ```bash
-    docker pull ghcr.io/lalit-patil-07/safion:latest
-    ```
+1. **Pull the Docker image:**
+   ```bash
+   docker pull ghcr.io/lalit-patil-07/safion:latest
+   ```
 
-2.  **Run the container:**
-    This command will start the application and make it accessible on port 5000.
-    ```bash
-    docker run -p 5000:5000 ghcr.io/lalit-patil-07/safion:latest
-    ```
+2. **Run the container:**
+   This command will start the application and make it accessible on port 5000.
+   ```bash
+   docker run -p 5000:5000 ghcr.io/lalit-patil-07/safion:latest
+   ```
 
-3.  **Access the application:**
-    Open your web browser and go to `http://localhost:5000`.
+3. **Access the application:**
+   Open your web browser and go to `http://localhost:5000`.
 
 ### Option 2: Build Docker Image from Source
 
 If you prefer to build the image yourself:
 
-1.  **Clone the repository:**
-    ```bash
-    git clone [https://github.com/Lalit-Patil-07/Safion.git](https://github.com/Lalit-Patil-07/Safion.git)
-    cd Safion
-    ```
+1. **Clone the repository:**
+   ```bash
+   git clone https://github.com/Lalit-Patil-07/Safion.git
+   cd Safion
+   ```
 
-2.  **Build the Docker image:**
-    ```bash
-    docker build -t safion-ppe-system .
-    ```
+2. **Build the Docker image:**
+   ```bash
+   docker build -t safion-ppe-system .
+   ```
 
-3.  **Run the container:**
-    ```bash
-    docker run -p 5000:5000 safion-ppe-system
-    ```
+3. **Run the container:**
+   ```bash
+   docker run -p 5000:5000 safion-ppe-system
+   ```
 
 ---
 
@@ -74,50 +73,50 @@ If you want to run the frontend and backend separately for development:
 
 ### Backend
 
-1.  Navigate to the `backend` directory and install dependencies:
-    ```bash
-    cd backend
-    pip install -r requirements.txt
-    ```
-2.  Run the Flask server:
-    ```bash
-    python app_server.py
-    ```
-    The backend will start on `http://localhost:5000`.
+1. Navigate to the `backend` directory and install dependencies:
+   ```bash
+   cd backend
+   pip install -r requirements.txt
+   ```
+
+2. Run the Flask server:
+   ```bash
+   python app_server.py
+   ```
+   The backend will start on `http://localhost:5000`.
 
 ### Frontend
 
-1.  In a new terminal, navigate to the `frontend` directory and install dependencies:
-    ```bash
-    cd frontend
-    npm install
-    ```
-2.  Start the React development server:
-    ```bash
-    npm start
-    ```
-    The frontend will open at `http://localhost:3000`.
+1. In a new terminal, navigate to the `frontend` directory and install dependencies:
+   ```bash
+   cd frontend
+   npm install
+   ```
+
+2. Start the React development server:
+   ```bash
+   npm start
+   ```
+   The frontend will open at `http://localhost:3000`.
 
 ---
 
 ## 📂 Project Structure
 
-````
-
+```
 ppe-detection-system/
 ├── backend/
-│   ├── app\_server.py       \# Flask backend server
-│   ├── known\_faces/        \# Stores images for recognized individuals
-│   ├── requirements.txt    \# Python dependencies
-│   └── violations\_images/  \# Stores images of violations
+│   ├── app_server.py       # Flask backend server
+│   ├── known_faces/        # Stores images for recognized individuals
+│   ├── requirements.txt    # Python dependencies
+│   └── violations_images/  # Stores images of violations
 ├── frontend/
 │   ├── src/
-│   │   └── App.js          \# Main React application component
-│   └── package.json        \# Node.js dependencies
-├── best.pt                 \# Trained YOLOv11 model weights
-├── Dockerfile              \# Docker configuration for deployment
-└── training\_file.ipynb     \# Jupyter notebook for model training
-
+│   │   └── App.js          # Main React application component
+│   └── package.json        # Node.js dependencies
+├── best.pt                 # Trained YOLOv11 model weights
+├── Dockerfile              # Docker configuration for deployment
+└── training_file.ipynb     # Jupyter notebook for model training
 ```
 
 ---
@@ -147,4 +146,3 @@ After 30 epochs of training, the model achieved a **mAP50-95 of 56.1%** and a **
 * **Enhanced Dashboard**: Add more analytics and visualizations for violation trends.
 * **User Authentication**: Implement user roles and permissions.
 * **More Robust Identity Management**: A more advanced system for managing known and unknown individuals.
-```
