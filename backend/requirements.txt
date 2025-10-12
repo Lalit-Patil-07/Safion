@@ -1,0 +1,12 @@
+flask
+flask_cors
+ultralytics
+opencv-python
+torch
+face_recognition
+numpy
+pandas
+scikit-learn
+pickle-mixin
+openvino-dev
+openvino

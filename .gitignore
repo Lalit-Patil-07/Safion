@@ -1,0 +1,30 @@
+# Node/Frontend dependencies and build artifacts
+**/node_modules
+/frontend/build
+
+# Python cache and virtual environments
+**/__pycache__
+*.pyc
+venv/
+env/
+
+# Backend generated files (runtime data)
+/backend/temp/
+/backend/violations_images/
+/backend/violations.json
+/backend/best_openvino_model/
+
+# IDE and OS specific files
+.idea/
+.vscode/
+*.DS_Store
+Thumbs.db
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Docker ignore (already handled by .dockerignore, but good practice)
+Dockerfile
+.dockerignore
