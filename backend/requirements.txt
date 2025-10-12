@@ -1,12 +1,22 @@
+# Flask for the web server
 flask
-flask_cors
+
+# YOLOv8 for object detection
 ultralytics
+
+# OpenCV for image processing
 opencv-python
-torch
+
+# Face recognition library
 face_recognition
+
+# Numerical operations
 numpy
+
+# PyTorch with CUDA 12.9 support (unofficial nightly build)
+--index-url https://download.pytorch.org/whl/cu129
+torch
+torchvision
+
+# Data manipulation
 pandas
-scikit-learn
-pickle-mixin
-openvino-dev
-openvino
