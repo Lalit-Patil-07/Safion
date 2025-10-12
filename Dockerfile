@@ -28,8 +28,8 @@ WORKDIR /app/backend
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy the built frontend from the build stage
-# The static folder in app_server.py is '../build', so this path is correct
-COPY --from=build /app/frontend/build ../build
+# The static folder in app_server.py is now '../frontend/build'
+COPY --from=build /app/frontend/build ../frontend/build
 
 # Copy the model into the backend directory where app_server.py expects it
 COPY best.pt .
