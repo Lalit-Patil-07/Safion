@@ -3,7 +3,7 @@ import { Camera, Upload, Video, AlertCircle, CheckCircle, XCircle, Settings, Pla
 import { v4 as uuidv4 } from 'uuid';
 
 // --- Constants ---
-const API_BASE_URL = 'http://localhost:5000';
+const API_BASE_URL = '';
 
 const PPE_CLASSES = {
     0: { name: "Hardhat", color: "#3B82F6", safe: true },
