@@ -14,7 +14,7 @@ Safion is a real-time Personal Protective Equipment (PPE) detection system desig
 ## 💻 Technology Stack
 
 - **Backend**: Python, Flask, PyTorch
-- **AI Model**: YOLOv8 for object detection and face_recognition for identity clustering
+- **AI Model**: YOLOv11m for object detection and face_recognition for identity clustering
 - **GPU Acceleration**: NVIDIA CUDA
 - **Real-time Video Processing**: OpenCV
 - **Frontend**: React, Tailwind CSS, Lucide React
@@ -30,7 +30,6 @@ This is the simplest way to get the application running.
 
 **Prerequisites:**
 - Docker installed
-- NVIDIA Container Toolkit installed for GPU support
 
 **Build and Run the Container:**
 
@@ -137,14 +136,14 @@ ppe-detection-system/
 │   ├── src/
 │   │   └── App.js          # Main React application component
 │   └── package.json        # Node.js dependencies
-├── best.pt                 # Trained YOLOv8 model weights
+├── best.pt                 # Trained YOLOv11m model weights
 ├── Dockerfile              # Docker configuration for deployment
 └── training_file.ipynb     # Jupyter notebook for model training
 ```
 
 ## 🧠 The AI Model
 
-The detection model is a YOLOv8n model trained on a custom dataset for PPE detection. The model is fine-tuned to detect the following classes:
+The detection model is a YOLOv11m model trained on a custom dataset for PPE detection. The model is fine-tuned to detect the following classes:
 
 - Hardhat
 - Mask
