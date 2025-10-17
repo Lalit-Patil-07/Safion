@@ -1,6 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Camera, Upload, Video, AlertCircle, CheckCircle, XCircle, Settings, Play, StopCircle, Loader, Shield, ShieldOff, ShieldCheck, BookCopy, X, Menu, Tv, Plus, Trash2, Maximize, Minimize, UserPlus, Users } from 'lucide-react';
-import { v4 as uuidv4 } from 'uuid';
+import { Camera, Upload, Video, AlertCircle, CheckCircle, XCircle, Settings, Play, StopCircle, Loader, Shield, ShieldOff, ShieldCheck, BookCopy, X, Menu, Tv, Plus, Trash2, Maximize, Minimize, UserPlus, Users, ChevronLeft, ChevronRight } from 'lucide-react';
 
 // --- Constants ---
 const API_BASE_URL = '';
@@ -19,7 +18,6 @@ const PPE_CLASSES = {
 };
 
 // --- Helper & UI Components ---
-
 const ImageModal = ({ imageUrl, onClose }) => {
     if (!imageUrl) return null;
     return (
@@ -35,7 +33,7 @@ const ImageModal = ({ imageUrl, onClose }) => {
 };
 
 // --- Navigation ---
-const Sidebar = ({ view, setView }) => {
+const Sidebar = ({ view, setView, isOpen, setIsOpen, serverStatus }) => {
     const navItems = [
         { id: 'live', icon: Tv, label: 'Live Detection' },
         { id: 'violations', icon: BookCopy, label: 'Violations Log' },
@@ -44,26 +42,117 @@ const Sidebar = ({ view, setView }) => {
     ];
 
     return (
-        <aside className="w-64 bg-card-secondary p-4 border-r border-border flex flex-col">
-            <h1 className="text-2xl font-bold text-text mb-8">Safion</h1>
-            <nav className="flex flex-col gap-2">
-                {navItems.map(item => (
-                    <button
-                        key={item.id}
-                        onClick={() => setView(item.id)}
-                        className={`flex items-center gap-3 px-4 py-3 rounded-md font-semibold text-sm transition-colors ${view === item.id ? 'bg-primary text-white' : 'text-text-secondary hover:bg-border'}`}
-                    >
-                        <item.icon size={20} />
-                        <span>{item.label}</span>
-                    </button>
-                ))}
-            </nav>
-        </aside>
+        <>
+            {/* Overlay for mobile */}
+            {isOpen && (
+                <div 
+                    className="fixed inset-0 bg-black/50 z-40 lg:hidden" 
+                    onClick={() => setIsOpen(false)}
+                />
+            )}
+            
+            {/* Sidebar */}
+            <aside 
+                className={`
+                    fixed top-0 left-0 h-full bg-card-secondary border-r border-border z-50
+                    transition-all duration-300 ease-in-out
+                    ${isOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
+                    ${isOpen ? 'w-56' : 'w-0 lg:w-16'}
+                `}
+            >
+                <div className="flex flex-col h-full">
+                    {/* Toggle Button - Top */}
+                    <div className="p-3 border-b border-border">
+                        {isOpen ? (
+                            <div className="flex items-center justify-between">
+                                <button
+                                    onClick={() => setIsOpen(!isOpen)}
+                                    className="p-2 text-text hover:bg-border rounded-md transition-all"
+                                    title="Collapse"
+                                >
+                                    <ChevronLeft size={20} />
+                                </button>
+                                <h1 className="text-xl font-bold text-text">
+                                    Safion
+                                </h1>
+                                <div className="w-9"></div>
+                            </div>
+                        ) : (
+                            <div className="flex justify-center">
+                                <button
+                                    onClick={() => setIsOpen(!isOpen)}
+                                    className="p-2 text-text hover:bg-border rounded-md transition-all"
+                                    title="Expand"
+                                >
+                                    <Shield size={20} className="text-primary" />
+                                </button>
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Navigation Items */}
+                    <nav className="flex flex-col gap-2 p-3 flex-1">
+                        {navItems.map(item => (
+                            <button
+                                key={item.id}
+                                onClick={() => {
+                                    setView(item.id);
+                                    // Close sidebar on mobile after selection
+                                    if (window.innerWidth < 1024) {
+                                        setIsOpen(false);
+                                    }
+                                }}
+                                className={`
+                                    flex items-center gap-3 px-3 py-2.5 rounded-md font-semibold text-sm transition-all
+                                    ${view === item.id ? 'bg-primary text-white' : 'text-text-secondary hover:bg-border'}
+                                    ${isOpen ? 'justify-start' : 'justify-center'}
+                                `}
+                                title={!isOpen ? item.label : ''}
+                            >
+                                <item.icon size={18} className="flex-shrink-0" />
+                                {isOpen && (
+                                    <span className="whitespace-nowrap">
+                                        {item.label}
+                                    </span>
+                                )}
+                            </button>
+                        ))}
+                    </nav>
+
+                    {/* Server Status - Bottom */}
+                    <div className="p-3 border-t border-border">
+                        <div className={`
+                            flex items-center gap-3 px-3 py-2.5 rounded-md
+                            ${isOpen ? 'justify-start' : 'justify-center'}
+                        `}>
+                            <div className={`
+                                w-2.5 h-2.5 rounded-full flex-shrink-0
+                                ${serverStatus === 'connected' ? 'bg-accent-green' : 
+                                  serverStatus === 'degraded' ? 'bg-accent-yellow' : 
+                                  'bg-accent-red'}
+                            `}></div>
+                            {isOpen && (
+                                <div className="flex flex-col">
+                                    <span className="text-xs text-text-secondary">Server Status</span>
+                                    <span className={`
+                                        text-sm font-semibold capitalize
+                                        ${serverStatus === 'connected' ? 'text-accent-green' : 
+                                          serverStatus === 'degraded' ? 'text-accent-yellow' : 
+                                          'text-accent-red'}
+                                    `}>
+                                        {serverStatus}
+                                    </span>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            </aside>
+        </>
     );
-}
+};
 
 // --- Page Components ---
-
 const ViolationLog = ({ violations, onImageClick, clearViolations }) => {
     const formatTimestamp = (isoString) => {
         const date = new Date(isoString);
@@ -144,7 +233,7 @@ const IdentityRecognitionPage = () => {
                     body: JSON.stringify({ name, violation_ids: Array.from(selectedIds) }),
                 });
                 setSelectedIds(new Set());
-                fetchUnknowns(); // Refresh
+                fetchUnknowns();
             } catch (error) {
                 console.error("Failed to merge faces:", error);
             }
@@ -204,11 +293,10 @@ const IdentityRecognitionPage = () => {
     );
 };
 
-
 const SettingsPage = ({ rtspStreams, setRtspStreams, startStream, serverStatus }) => {
-
     const addStream = () => {
-        setRtspStreams(prev => [...prev, { id: uuidv4(), name: `Stream ${prev.length + 1}`, url: '' }]);
+        const newId = Date.now().toString();
+        setRtspStreams(prev => [...prev, { id: newId, name: `Stream ${prev.length + 1}`, url: '' }]);
     };
 
     const removeStream = (id) => {
@@ -269,7 +357,6 @@ const SettingsPage = ({ rtspStreams, setRtspStreams, startStream, serverStatus }
     );
 };
 
-
 const LiveDetectionPage = ({
     activeStreams,
     stopStream,
@@ -283,7 +370,6 @@ const LiveDetectionPage = ({
 }) => {
     const zoomedStream = zoomedStreamId ? activeStreams[zoomedStreamId] : null;
 
-    // Render the "theater mode" if a stream is zoomed
     if (zoomedStream) {
         const otherStreams = Object.values(activeStreams).filter(s => s.streamId !== zoomedStreamId);
         const hasViolation = zoomedStream.detections && zoomedStream.detections.some(d => !d.safe);
@@ -326,7 +412,6 @@ const LiveDetectionPage = ({
         );
     }
 
-    // Render the default grid view
     return (
         <div className="p-6">
             <div className="flex justify-between items-center mb-6">
@@ -385,10 +470,9 @@ const LiveDetectionPage = ({
     );
 };
 
-
 // --- Main App Component ---
 function App() {
-    const [view, setView] = useState('live'); // 'live', 'violations', 'settings'
+    const [view, setView] = useState('live');
     const [serverStatus, setServerStatus] = useState('checking');
     const [rtspStreams, setRtspStreams] = useState([]);
     const [isLoading, setIsLoading] = useState(false);
@@ -396,6 +480,7 @@ function App() {
     const [violations, setViolations] = useState([]);
     const [modalImageUrl, setModalImageUrl] = useState(null);
     const [zoomedStreamId, setZoomedStreamId] = useState(null);
+    const [sidebarOpen, setSidebarOpen] = useState(true);
 
     const fileInputRef = useRef(null);
 
@@ -527,7 +612,7 @@ function App() {
                        }
                     });
                 } catch (error) {
-                    // console.error(`Stats poll for ${streamId} failed:`, error.message);
+                    // Silently handle polling errors
                 }
             }
         }, 1000);
@@ -584,21 +669,14 @@ function App() {
             default:
                 return null;
         }
-    }
-
+    };
 
     return (
         <div className="min-h-screen bg-background text-text font-sans flex">
             <ImageModal imageUrl={modalImageUrl} onClose={() => setModalImageUrl(null)} />
-            <Sidebar view={view} setView={setView} />
+            <Sidebar view={view} setView={setView} isOpen={sidebarOpen} setIsOpen={setSidebarOpen} serverStatus={serverStatus} />
 
-            <main className="flex-1 h-screen overflow-y-auto">
-                <header className="bg-card p-4 border-b border-border shadow-sm sticky top-0 z-10 flex justify-end items-center">
-                    <div className="flex items-center gap-2">
-                        <div className={`w-3 h-3 rounded-full ${serverStatus === 'connected' ? 'bg-accent-green' : serverStatus === 'degraded' ? 'bg-accent-yellow' : 'bg-accent-red'}`}></div>
-                        <span className="text-sm text-text-secondary capitalize">{serverStatus}</span>
-                    </div>
-                </header>
+            <main className={`flex-1 h-screen overflow-y-auto transition-all duration-300 ${sidebarOpen ? 'lg:ml-56' : 'lg:ml-16'}`}>
                 {renderView()}
             </main>
             <input ref={fileInputRef} type="file" accept="video/*" onChange={handleVideoUpload} className="hidden" />
