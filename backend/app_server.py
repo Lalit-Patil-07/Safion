@@ -25,8 +25,7 @@ TEMP_DIR = os.path.join(os.path.dirname(__file__), 'temp')
 KNOWN_FACES_DIR = os.path.join(os.path.dirname(__file__), 'known_faces')
 VIOLATIONS_IMAGE_DIR = os.path.join(os.path.dirname(__file__), 'violations_images')
 VIOLATION_LOG_FILE = os.path.join(os.path.dirname(__file__), 'violations.json')
-VIOLATION_COOLDOWN = 10
-
+VIOLATION_COOLDOWN = 10 
 # --- Global State ---
 model = None
 active_streams = {}
@@ -43,6 +42,29 @@ PPE_CLASSES = {
     8: {"name": "Machinery", "color": "#6366F1", "safe": True}, 9: {"name": "Vehicle", "color": "#14B8A6", "safe": True}
 }
 
+# A class to handle video streaming in a separate thread
+class VideoStream:
+    def __init__(self, src=0):
+        self.stream = cv2.VideoCapture(src, cv2.CAP_FFMPEG)
+        self.stream.set(cv2.CAP_PROP_BUFFERSIZE, 2)
+        self.grabbed, self.frame = self.stream.read()
+        self.stopped = False
+
+    def start(self):
+        Thread(target=self.update, args=()).start()
+        return self
+
+    def update(self):
+        while True:
+            if self.stopped:
+                return
+            self.grabbed, self.frame = self.stream.read()
+
+    def read(self):
+        return self.frame
+
+    def stop(self):
+        self.stopped = True
 # --- Serve React App ---
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
@@ -133,15 +155,21 @@ def stream_worker(stream_id, source_type, source_path, stop_event):
     cap = None
     try:
         source = int(source_path) if source_type == 'webcam' else source_path
-        cap = cv2.VideoCapture(source)
-        if not cap.isOpened(): return
-        width, height = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        # Use the new VideoStream class for capturing
+        vs = VideoStream(src=source).start()
+        # cap = cv2.VideoCapture(source)
+        # if not cap.isOpened(): return
+        # width, height = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         fps_deque = deque(maxlen=30)
         while not stop_event.is_set():
-            ret, frame = cap.read()
-            if not ret:
-                if source_type == 'video': cap.set(cv2.CAP_PROP_POS_FRAMES, 0); continue
-                else: break
+            frame = vs.read()
+            if frame is None:
+                continue
+
+            # ret, frame = cap.read()
+            # if not ret:
+            #     if source_type == 'video': cap.set(cv2.CAP_PROP_POS_FRAMES, 0); continue
+            #     else: break
             start_time = time.time()
             all_detections = []
             if model:
@@ -196,13 +224,14 @@ def stream_worker(stream_id, source_type, source_path, stop_event):
             with stream_lock:
                 if stream_id in active_streams:
                     stats = active_streams[stream_id]['stats']
-                    stats.update({ 'fps': sum(fps_deque) / len(fps_deque) if fps_deque else 0, 'frame_count': stats.get('frame_count', 0) + 1, 'violation_count': stats.get('violation_count', 0) + len([d for d in all_detections if not d['safe']]), 'last_detections': all_detections, 'original_resolution': [height, width] })
+                    stats.update({ 'fps': sum(fps_deque) / len(fps_deque) if fps_deque else 0, 'frame_count': stats.get('frame_count', 0) + 1, 'violation_count': stats.get('violation_count', 0) + len([d for d in all_detections if not d['safe']]), 'last_detections': all_detections, 'original_resolution': [frame.shape[0], frame.shape[1]] })
                     active_streams[stream_id]['frame'] = buffer.tobytes()
     except Exception as e:
         import traceback
         print(f"💥 Worker Exception {stream_id}: {e}\n{traceback.format_exc()}")
     finally:
-        if cap: cap.release()
+        if 'vs' in locals() and vs:
+            vs.stop()
 
 def frame_generator(stream_id):
     # ... (function is unchanged)
