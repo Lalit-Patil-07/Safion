@@ -45,7 +45,8 @@ PPE_CLASSES = {
 # A class to handle video streaming in a separate thread
 class VideoStream:
     def __init__(self, src=0):
-        self.stream = cv2.VideoCapture(src, cv2.CAP_FFMPEG)
+        # ✅ FIX: Removed cv2.CAP_FFMPEG to let OpenCV use the default backend for webcams
+        self.stream = cv2.VideoCapture(src)
         self.stream.set(cv2.CAP_PROP_BUFFERSIZE, 2)
         self.grabbed, self.frame = self.stream.read()
         self.stopped = False
@@ -155,21 +156,19 @@ def stream_worker(stream_id, source_type, source_path, stop_event):
     cap = None
     try:
         source = int(source_path) if source_type == 'webcam' else source_path
-        # Use the new VideoStream class for capturing
         vs = VideoStream(src=source).start()
-        # cap = cv2.VideoCapture(source)
-        # if not cap.isOpened(): return
-        # width, height = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+        # ✅ RECOMMENDED: Add a check to ensure the video source opened correctly.
+        if not vs.stream.isOpened():
+            print(f"💥 Error: Could not open video source: {source}")
+            return
+
         fps_deque = deque(maxlen=30)
         while not stop_event.is_set():
             frame = vs.read()
             if frame is None:
                 continue
 
-            # ret, frame = cap.read()
-            # if not ret:
-            #     if source_type == 'video': cap.set(cv2.CAP_PROP_POS_FRAMES, 0); continue
-            #     else: break
             start_time = time.time()
             all_detections = []
             if model:
