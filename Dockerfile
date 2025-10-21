@@ -12,9 +12,8 @@ FROM nvidia/cuda:12.9.0-runtime-ubuntu22.04
 # Set environment variables
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
-ENV PIP_NO_CACHE_DIR=1
 
-# Install Python, pip, and essential libraries
+# Install Python, pip, and essential libraries in one layer
 RUN apt-get update && apt-get install -y \
     python3.10 \
     python3-pip \
@@ -22,6 +21,7 @@ RUN apt-get update && apt-get install -y \
     cmake \
     libgl1 \
     libglib2.0-0 \
+    && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
 # Set the working directory
@@ -30,19 +30,12 @@ WORKDIR /app
 # Copy the requirements file
 COPY backend/requirements.txt .
 
-# Install PyTorch packages separately to reduce peak disk usage
-# Using CUDA 12.9 as per official documentation
-RUN pip3 install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cu129 && \
-    rm -rf /tmp/* /root/.cache
-
-RUN pip3 install --no-cache-dir torchvision --index-url https://download.pytorch.org/whl/cu129 && \
-    rm -rf /tmp/* /root/.cache
-
-RUN pip3 install --no-cache-dir torchaudio --index-url https://download.pytorch.org/whl/cu129 && \
-    rm -rf /tmp/* /root/.cache
-
-# Install the rest of the Python dependencies from the requirements file
-RUN pip3 install --no-cache-dir -r requirements.txt && \
+# Install all Python dependencies and clean up in a SINGLE layer
+# This reduces peak disk usage and final layer size
+RUN pip3 install --no-cache-dir \
+        --index-url https://download.pytorch.org/whl/cu129 \
+        torch torchvision torchaudio && \
+    pip3 install --no-cache-dir -r requirements.txt && \
     rm -rf /tmp/* /root/.cache
 
 # Copy the backend application and model
