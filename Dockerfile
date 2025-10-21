@@ -12,6 +12,7 @@ FROM nvidia/cuda:12.9.0-runtime-ubuntu22.04
 # Set environment variables
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
+ENV PIP_NO_CACHE_DIR=1
 
 # Install Python, pip, and essential libraries
 RUN apt-get update && apt-get install -y \
@@ -29,11 +30,20 @@ WORKDIR /app
 # Copy the requirements file
 COPY backend/requirements.txt .
 
-# Install PyTorch, Torchvision, and Torchaudio from the specific CUDA 12.9 index
-RUN pip3 install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu129
+# Install PyTorch packages separately to reduce peak disk usage
+# Using CUDA 12.9 as per official documentation
+RUN pip3 install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cu129 && \
+    rm -rf /tmp/* /root/.cache
+
+RUN pip3 install --no-cache-dir torchvision --index-url https://download.pytorch.org/whl/cu129 && \
+    rm -rf /tmp/* /root/.cache
+
+RUN pip3 install --no-cache-dir torchaudio --index-url https://download.pytorch.org/whl/cu129 && \
+    rm -rf /tmp/* /root/.cache
 
 # Install the rest of the Python dependencies from the requirements file
-RUN pip3 install --no-cache-dir -r requirements.txt
+RUN pip3 install --no-cache-dir -r requirements.txt && \
+    rm -rf /tmp/* /root/.cache
 
 # Copy the backend application and model
 COPY backend/app_server.py .
