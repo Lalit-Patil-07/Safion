@@ -1,17 +1,23 @@
-# Flask for the web server
-flask
+# Web framework
+flask>=3.0.0
+flask-sqlalchemy>=3.1.0
+flask-bcrypt>=1.0.1
+flask-jwt-extended>=4.6.0
 
-# YOLOv8 for object detection
-ultralytics
+# YOLO
+ultralytics>=8.0.0
 
-# OpenCV for image processing
-opencv-python
+# Computer vision
+opencv-python-headless>=4.9.0
 
-# Face recognition library
-face_recognition
+# Face recognition (requires dlib — see README for Windows install)
+face_recognition>=1.3.0
 
-# Numerical operations
-numpy
+# Numerics
+numpy>=1.26.0
 
-# Data manipulation
-pandas
+# WSGI server (production)
+gunicorn>=21.2.0
+
+# Database migrations (optional but recommended)
+flask-migrate>=4.0.0
