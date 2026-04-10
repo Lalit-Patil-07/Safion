@@ -14,16 +14,11 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from typing import Any, Optional
 
 import numpy as np
 
 logger = logging.getLogger(__name__)
-
-
-def _now():
-    return datetime.now(timezone.utc)
 
 
 @dataclass
@@ -162,8 +157,7 @@ class TaskQueue:
         image_filename = f"{uuid.uuid4().hex}.jpg"
         cv2.imwrite(os.path.join(violation_dir, image_filename), job.person_crop_bgr)
 
-        # ── 4. Write violation + update identity metadata ─────────────────────
-        now_ts = datetime.utcnow().replace(tzinfo=None)   # naive UTC for SQLite compat
+        # ── 4. Write violation ────────────────────────────────────────────────
         violation = Violation(
             stream_id=job.stream_id,
             violation_type=job.violation_type,
@@ -173,16 +167,6 @@ class TaskQueue:
             image_filename=image_filename,
         )
         db.session.add(violation)
-
-        # Update identity's last_seen and thumbnail (if not already set)
-        if identity_id:
-            from face.models import FaceIdentity
-            identity_row = FaceIdentity.query.get(identity_id)
-            if identity_row:
-                identity_row.last_seen = _now()
-                if not identity_row.thumbnail_filename:
-                    identity_row.thumbnail_filename = image_filename
-
         db.session.commit()
 
         logger.info("Violation: %s → %s (score=%s)",

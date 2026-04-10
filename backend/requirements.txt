@@ -10,14 +10,15 @@ ultralytics>=8.0.0
 # Computer vision
 opencv-python-headless>=4.9.0
 
-# Face recognition (requires dlib — see README for Windows install)
-face_recognition>=1.3.0
+# Face recognition — InsightFace (buffalo_l: RetinaFace + ArcFace)
+insightface>=0.7.3
+onnxruntime>=1.17.0      # CPU inference backend for InsightFace
+
+# Clustering
+scikit-learn>=1.4.0
 
 # Numerics
 numpy>=1.26.0
 
 # WSGI server (production)
 gunicorn>=21.2.0
-
-# Database migrations (optional but recommended)
-flask-migrate>=4.0.0

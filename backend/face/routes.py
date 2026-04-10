@@ -1,188 +1,320 @@
+"""
+Face + Identity API
+Prefix: /face
+"""
 import os
-import uuid
+from datetime import datetime, timezone, timedelta
 
 import cv2
-import face_recognition
 import numpy as np
 from flask import Blueprint, request, jsonify, current_app
-from flask_jwt_extended import get_jwt_identity
+from sqlalchemy import func
 
 from extensions import db
-from face.models import FaceIdentity, FaceEmbedding
-from face.models import Violation
-from middleware.auth_required import jwt_required_route, admin_required
+from face.models import FaceIdentity, FaceEmbedding, Violation
 
-face_bp = Blueprint("face", __name__, url_prefix="/api/v1/face")
+face_bp = Blueprint("face", __name__, url_prefix="/face")
 
 
-def _get_pipeline():
+def _pipeline():
     return current_app.extensions["face_pipeline"]
 
 
-# ---------------------------------------------------------------------------
-# Enroll a new identity from a clean uploaded image
-# ---------------------------------------------------------------------------
-@face_bp.post("/enroll")
-@jwt_required_route()
-def enroll():
+# ── Dashboard stats ───────────────────────────────────────────────────────────
+@face_bp.get("/stats")
+def get_stats():
     """
-    Enroll a new (or update an existing) identity from a clean face photograph.
-    Accepts multipart/form-data with:
-        - file  : image file (jpg/png)
-        - name  : person's display name
+    Dashboard summary numbers.
+    Called once on dashboard load — not polled.
     """
-    pipeline = _get_pipeline()
-
-    if "file" not in request.files:
-        return jsonify({"error": "Image file is required (field: 'file')."}), 400
-
-    name = (request.form.get("name") or "").strip()
-    if not name:
-        return jsonify({"error": "Name is required (field: 'name')."}), 400
-
-    file = request.files["file"]
-    ext = os.path.splitext(file.filename)[1].lower()
-    if ext not in (".jpg", ".jpeg", ".png"):
-        return jsonify({"error": "Only JPG and PNG images are accepted."}), 400
-
-    # Decode the uploaded image in-memory (never trust the extension alone)
-    file_bytes = np.frombuffer(file.read(), dtype=np.uint8)
-    img_bgr = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
-    if img_bgr is None:
-        return jsonify({"error": "Could not decode image file."}), 400
-    img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
-
-    encoding = pipeline.encode_image(img_rgb)
-    if encoding is None:
-        return jsonify({
-            "error": "No face detected in the uploaded image. "
-                     "Please use a clear, frontal photograph without heavy occlusion."
-        }), 422
-
-    # Upsert the identity
-    user_id = get_jwt_identity()
-    identity = FaceIdentity.query.filter_by(name=name).first()
-    if not identity:
-        identity = FaceIdentity(name=name, created_by=user_id)
-        db.session.add(identity)
-        db.session.flush()  # get identity.id before commit
-
-    # Save the source image to known_faces for record-keeping
-    known_faces_dir = current_app.config["KNOWN_FACES_DIR"]
-    os.makedirs(known_faces_dir, exist_ok=True)
-    safe_name = "".join(c for c in name if c.isalnum() or c in " _-").strip().replace(" ", "_")
-    img_filename = f"{safe_name}_{uuid.uuid4().hex[:8]}.jpg"
-    img_path = os.path.join(known_faces_dir, img_filename)
-    cv2.imwrite(img_path, img_bgr)
-
-    pipeline.add_embedding(
-        identity_id=identity.id,
-        encoding=encoding,
-        source_image=img_filename,
+    today_start = datetime.now(timezone.utc).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    total_identities   = FaceIdentity.query.filter_by(is_archived=False).count()
+    confirmed_count    = FaceIdentity.query.filter_by(is_confirmed=True,  is_archived=False).count()
+    unconfirmed_count  = FaceIdentity.query.filter_by(is_confirmed=False, is_archived=False).count()
+    total_violations   = Violation.query.count()
+    violations_today   = Violation.query.filter(Violation.timestamp >= today_start).count()
+    repeat_offenders   = (
+        db.session.query(Violation.identity_id)
+        .filter(Violation.identity_id.isnot(None))
+        .group_by(Violation.identity_id)
+        .having(func.count() >= 3)
+        .count()
     )
 
     return jsonify({
-        "message": f"Identity '{name}' enrolled successfully.",
-        "identity": identity.to_dict(),
-    }), 201
+        "total_identities":  total_identities,
+        "confirmed_count":   confirmed_count,
+        "unconfirmed_count": unconfirmed_count,
+        "total_violations":  total_violations,
+        "violations_today":  violations_today,
+        "repeat_offenders":  repeat_offenders,
+    }), 200
 
 
-# ---------------------------------------------------------------------------
-# Merge unknown violations into a named identity
-# ---------------------------------------------------------------------------
-@face_bp.post("/merge")
-@jwt_required_route()
-def merge_faces():
+# ── Identity list (paginated, filtered) ───────────────────────────────────────
+@face_bp.get("/identities")
+def list_identities():
     """
-    Assign a name to one or more "Unknown Person" violations.
-    Attempts to extract a face embedding from each violation's head crop;
-    only stores embeddings that pass the quality threshold.
+    Paginated identity list with search and filter.
 
-    Body: { "name": str, "violation_ids": [str, ...] }
+    Query params:
+        page      (int, default 1)
+        limit     (int, default 24, max 100)
+        search    (str, label contains)
+        confirmed (true | false | all, default all)
+        sort      (last_seen | created_at | label, default last_seen)
     """
-    pipeline = _get_pipeline()
-    data = request.get_json(silent=True) or {}
+    page      = max(1, request.args.get("page",  1,    type=int))
+    limit     = min(100, max(1, request.args.get("limit", 24, type=int)))
+    search    = request.args.get("search",    "").strip()
+    confirmed = request.args.get("confirmed", "all").strip()
+    sort      = request.args.get("sort",      "last_seen").strip()
 
-    name = (data.get("name") or "").strip()
-    violation_ids = data.get("violation_ids") or []
+    query = FaceIdentity.query.filter_by(is_archived=False)
 
-    if not name:
-        return jsonify({"error": "Name is required."}), 400
-    if not violation_ids:
-        return jsonify({"error": "violation_ids list is required."}), 400
+    if search:
+        query = query.filter(FaceIdentity.label.ilike(f"%{search}%"))
+    if confirmed == "true":
+        query = query.filter_by(is_confirmed=True)
+    elif confirmed == "false":
+        query = query.filter_by(is_confirmed=False)
 
-    user_id = get_jwt_identity()
+    if sort == "label":
+        query = query.order_by(FaceIdentity.label)
+    elif sort == "created_at":
+        query = query.order_by(FaceIdentity.created_at.desc())
+    else:  # last_seen
+        query = query.order_by(FaceIdentity.last_seen.desc().nullslast())
 
-    # Upsert the identity
-    identity = FaceIdentity.query.filter_by(name=name).first()
+    paginated = query.paginate(page=page, per_page=limit, error_out=False)
+
+    # Use to_summary() — no .count() subqueries per identity for large lists
+    # Full counts available on identity detail view
+    items = []
+    for identity in paginated.items:
+        d = identity.to_summary()
+        # Add counts efficiently using already-loaded relationship counts
+        d["violation_count"] = identity.violations.count()
+        d["embedding_count"] = identity.embeddings.count()
+        items.append(d)
+
+    return jsonify({
+        "identities": items,
+        "total":      paginated.total,
+        "page":       page,
+        "pages":      paginated.pages,
+        "limit":      limit,
+    }), 200
+
+
+# ── Single identity ───────────────────────────────────────────────────────────
+@face_bp.get("/identity/<identity_id>")
+def get_identity(identity_id: str):
+    identity = FaceIdentity.query.get(identity_id)
     if not identity:
-        identity = FaceIdentity(name=name, created_by=user_id)
+        return jsonify({"error": "Identity not found."}), 404
+    return jsonify(identity.to_dict()), 200
+
+
+# ── Violations for one identity (timeline) ────────────────────────────────────
+@face_bp.get("/identity/<identity_id>/violations")
+def get_identity_violations(identity_id: str):
+    """
+    Violation timeline for an identity.
+    Includes aggregated counts by violation type for the summary bar.
+    """
+    identity = FaceIdentity.query.get(identity_id)
+    if not identity:
+        return jsonify({"error": "Identity not found."}), 404
+
+    violations = (
+        Violation.query
+        .filter_by(identity_id=identity_id)
+        .order_by(Violation.timestamp.desc())
+        .all()
+    )
+
+    # Aggregate by type for the summary bar
+    type_counts: dict = {}
+    for v in violations:
+        type_counts[v.violation_type] = type_counts.get(v.violation_type, 0) + 1
+
+    return jsonify({
+        "identity":    identity.to_dict(),
+        "violations":  [v.to_dict() for v in violations],
+        "type_counts": type_counts,
+    }), 200
+
+
+# ── Rename / confirm ──────────────────────────────────────────────────────────
+@face_bp.patch("/identity/<identity_id>")
+def update_identity(identity_id: str):
+    """
+    Rename and/or confirm an identity.
+    Body: {"label": str}  — sets is_confirmed=True automatically.
+    """
+    identity = FaceIdentity.query.get(identity_id)
+    if not identity:
+        return jsonify({"error": "Identity not found."}), 404
+
+    data  = request.get_json(silent=True) or {}
+    label = (data.get("label") or "").strip()
+    if not label:
+        return jsonify({"error": "label is required."}), 400
+
+    existing = FaceIdentity.query.filter(
+        FaceIdentity.label == label,
+        FaceIdentity.id    != identity_id,
+    ).first()
+    if existing:
+        return jsonify({"error": f"Label '{label}' already in use."}), 409
+
+    identity.label        = label
+    identity.is_confirmed = True
+    db.session.commit()
+    _pipeline().reload_cache()
+
+    return jsonify({"message": "Identity updated.", "identity": identity.to_dict()}), 200
+
+
+# ── Merge ─────────────────────────────────────────────────────────────────────
+@face_bp.post("/identity/merge")
+def merge_identities():
+    """
+    Merge source into target.
+    Source is archived (not deleted) — all data moves to target.
+    Body: {"source_id": str, "target_id": str}
+    """
+    data      = request.get_json(silent=True) or {}
+    source_id = data.get("source_id", "").strip()
+    target_id = data.get("target_id", "").strip()
+
+    if not source_id or not target_id or source_id == target_id:
+        return jsonify({"error": "source_id and target_id must differ."}), 400
+
+    source = FaceIdentity.query.get(source_id)
+    target = FaceIdentity.query.get(target_id)
+    if not source: return jsonify({"error": "source_id not found."}), 404
+    if not target: return jsonify({"error": "target_id not found."}), 404
+
+    # Move embeddings and violations to target
+    FaceEmbedding.query.filter_by(identity_id=source_id).update({"identity_id": target_id})
+    Violation.query.filter_by(identity_id=source_id).update({"identity_id": target_id})
+
+    # Archive source — do NOT delete, keeps audit trail
+    source.is_archived   = True
+    source.merged_into_id = target_id
+
+    # If source had a thumbnail and target doesn't, inherit it
+    if source.thumbnail_filename and not target.thumbnail_filename:
+        target.thumbnail_filename = source.thumbnail_filename
+
+    db.session.commit()
+    _pipeline().reload_cache()
+
+    return jsonify({
+        "message":  f"Merged '{source.label}' into '{target.label}'.",
+        "identity": target.to_dict(),
+    }), 200
+
+
+# ── Delete ────────────────────────────────────────────────────────────────────
+@face_bp.delete("/identity/<identity_id>")
+def delete_identity(identity_id: str):
+    """Hard delete — archives instead of destroying."""
+    identity = FaceIdentity.query.get(identity_id)
+    if not identity:
+        return jsonify({"error": "Identity not found."}), 404
+    identity.is_archived = True
+    db.session.commit()
+    _pipeline().reload_cache()
+    return jsonify({"message": f"Identity '{identity.label}' archived."}), 200
+
+
+# ── Trigger clustering ────────────────────────────────────────────────────────
+@face_bp.post("/cluster")
+def trigger_clustering():
+    from face.clustering import run_clustering
+    eps         = request.args.get("eps",        current_app.config["CLUSTER_EPS"],         type=float)
+    min_samples = request.args.get("min_samples", current_app.config["CLUSTER_MIN_SAMPLES"], type=int)
+    result      = run_clustering(eps=eps, min_samples=min_samples)
+    _pipeline().reload_cache()
+    return jsonify(result), 200
+
+
+# ── Enroll from clean photo ───────────────────────────────────────────────────
+@face_bp.post("/enroll")
+def enroll():
+    pipeline = _pipeline()
+    if "file" not in request.files:
+        return jsonify({"error": "file required."}), 400
+    label = (request.form.get("label") or "").strip()
+    if not label:
+        return jsonify({"error": "label required."}), 400
+
+    file     = request.files["file"]
+    ext      = os.path.splitext(file.filename)[1].lower()
+    if ext not in (".jpg", ".jpeg", ".png"):
+        return jsonify({"error": "JPG or PNG only."}), 400
+
+    file_bytes = np.frombuffer(file.read(), dtype=np.uint8)
+    img_bgr    = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+    if img_bgr is None:
+        return jsonify({"error": "Could not decode image."}), 400
+
+    faces = pipeline.embed_crop(img_bgr)
+    if not faces:
+        return jsonify({"error": "No face detected."}), 422
+    if len(faces) > 1:
+        return jsonify({"error": f"{len(faces)} faces found. Use a single-face photo."}), 422
+
+    identity = FaceIdentity.query.filter_by(label=label).first()
+    if not identity:
+        identity = FaceIdentity(label=label, is_confirmed=True)
         db.session.add(identity)
         db.session.flush()
+
+    emb_row           = FaceEmbedding(identity_id=identity.id, det_score=faces[0]["det_score"])
+    emb_row.embedding = faces[0]["embedding"]
+    db.session.add(emb_row)
+    db.session.commit()
+    pipeline.reload_cache()
+
+    return jsonify({"message": f"'{label}' enrolled.", "identity": identity.to_dict()}), 201
+
+
+# ── Legacy: merge from violation IDs ─────────────────────────────────────────
+@face_bp.post("/merge")
+def merge_from_violations():
+    """Kept for frontend compat. Links violations to a named identity."""
+    data          = request.get_json(silent=True) or {}
+    label         = (data.get("name") or "").strip()
+    violation_ids = data.get("violation_ids") or []
+
+    if not label:          return jsonify({"error": "name required."}), 400
+    if not violation_ids:  return jsonify({"error": "violation_ids required."}), 400
+
+    identity = FaceIdentity.query.filter_by(label=label).first()
+    if not identity:
+        identity = FaceIdentity(label=label, is_confirmed=True)
+        db.session.add(identity)
+        db.session.flush()
+    else:
+        identity.is_confirmed = True
 
     violations = Violation.query.filter(Violation.id.in_(violation_ids)).all()
     if not violations:
         return jsonify({"error": "No matching violations found."}), 404
 
-    violations_image_dir = current_app.config["VIOLATIONS_IMAGE_DIR"]
-    embeddings_added = 0
-
-    for violation in violations:
-        violation.identity_id = identity.id
-        violation.raw_name = name
-
-        # Attempt to extract an embedding from the stored violation crop
-        if violation.image_filename:
-            img_path = os.path.join(violations_image_dir, violation.image_filename)
-            if os.path.exists(img_path):
-                img_bgr = cv2.imread(img_path)
-                if img_bgr is not None:
-                    img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
-                    encoding = pipeline.encode_image(img_rgb)
-                    if encoding is not None:
-                        quality = pipeline.compute_quality_score(encoding, identity.id)
-                        if quality >= current_app.config["FACE_MIN_QUALITY_SCORE"]:
-                            pipeline.add_embedding(
-                                identity_id=identity.id,
-                                encoding=encoding,
-                                source_image=violation.image_filename,
-                                quality_score=quality,
-                            )
-                            embeddings_added += 1
+    for v in violations:
+        v.identity_id = identity.id
 
     db.session.commit()
-    # Final cache reload in case add_embedding was not called (no quality crops)
-    pipeline.reload_cache()
+    _pipeline().reload_cache()
 
     return jsonify({
-        "message": f"Merged {len(violations)} violations into identity '{name}'.",
+        "message":  f"Linked {len(violations)} violations to '{label}'.",
         "identity": identity.to_dict(),
-        "embeddings_added": embeddings_added,
     }), 200
-
-
-# ---------------------------------------------------------------------------
-# List all known identities
-# ---------------------------------------------------------------------------
-@face_bp.get("/identities")
-@jwt_required_route()
-def list_identities():
-    identities = FaceIdentity.query.order_by(FaceIdentity.name).all()
-    return jsonify([i.to_dict() for i in identities]), 200
-
-
-# ---------------------------------------------------------------------------
-# Delete an identity and all its embeddings
-# ---------------------------------------------------------------------------
-@face_bp.delete("/identity/<identity_id>")
-@admin_required()
-def delete_identity(identity_id: str):
-    identity = FaceIdentity.query.get(identity_id)
-    if not identity:
-        return jsonify({"error": "Identity not found."}), 404
-
-    db.session.delete(identity)
-    db.session.commit()
-    _get_pipeline().reload_cache()
-
-    return jsonify({"message": f"Identity '{identity.name}' deleted."}), 200

@@ -1,25 +1,18 @@
 """
-Stream worker
-=============
-Runs in a dedicated thread per active video stream.
-
+Stream worker — YOLO detection + violation dispatch
+===================================================
 Responsibilities
-----------------
-- Read frames from VideoStream (threaded capture)
-- Run YOLO inference via YOLOService (shared, lock-protected)
-- Identify person↔violation associations
-- Extract head crops (NOT full-body crops)
-- Enqueue ViolationLogJobs — never block on logging or face recognition
-- Annotate the frame with bboxes/labels
-- JPEG-encode and store the frame for MJPEG delivery
+  - Threaded frame capture
+  - YOLO inference (PPE detection)
+  - Person↔violation association
+  - Crop person bbox, enqueue ViolationJob (non-blocking)
+  - Annotate frame + JPEG encode for MJPEG delivery
 
-Explicitly NOT responsible for
--------------------------------
-- Face recognition (async in TaskQueue)
-- Database writes (async in TaskQueue)
-- Any I/O that would stall the frame loop
+NOT responsible for
+  - Face recognition  (runs in TaskQueue workers)
+  - Database writes   (runs in TaskQueue workers)
+  - Head-cropping     (InsightFace handles face detection internally)
 """
-
 import logging
 import time
 from collections import deque
@@ -34,21 +27,11 @@ from detection.association import split_detections, check_association
 logger = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# Threaded frame capture
-# ---------------------------------------------------------------------------
 class VideoStream:
-    """
-    Reads frames in a background thread so the main loop is never blocked
-    waiting for a slow capture device.
-    Frame rate is capped by `fps_limit` via a sleep in the update loop.
-    """
-
     def __init__(self, src, fps_limit: int = 30):
         self.stream = cv2.VideoCapture(src)
         self.stream.set(cv2.CAP_PROP_BUFFERSIZE, 2)
-        self.fps_limit = fps_limit
-        self._frame_interval = 1.0 / max(1, fps_limit)
+        self._interval = 1.0 / max(1, fps_limit)
         self.grabbed, self.frame = self.stream.read()
         self.stopped = False
 
@@ -61,12 +44,10 @@ class VideoStream:
             t0 = time.monotonic()
             grabbed, frame = self.stream.read()
             if grabbed:
-                self.grabbed = grabbed
-                self.frame = frame
-            elapsed = time.monotonic() - t0
-            sleep_for = self._frame_interval - elapsed
-            if sleep_for > 0:
-                time.sleep(sleep_for)
+                self.grabbed, self.frame = grabbed, frame
+            sleep = self._interval - (time.monotonic() - t0)
+            if sleep > 0:
+                time.sleep(sleep)
 
     def read(self) -> Optional[np.ndarray]:
         return self.frame if self.grabbed else None
@@ -78,80 +59,42 @@ class VideoStream:
             self.stream.release()
 
 
-# ---------------------------------------------------------------------------
-# Frame annotation
-# ---------------------------------------------------------------------------
-def _annotate_frame(frame: np.ndarray, detections: list[dict]) -> None:
-    """Draw bounding boxes and labels onto `frame` in-place."""
+def _annotate(frame: np.ndarray, detections: list[dict]) -> None:
     for det in detections:
         x1, y1, x2, y2 = map(int, det["bbox"])
-        hex_color = det["color"].lstrip("#")
-        bgr = tuple(int(hex_color[i:i+2], 16) for i in (4, 2, 0))
-
+        h = det["color"].lstrip("#")
+        bgr = tuple(int(h[i:i+2], 16) for i in (4, 2, 0))
         cv2.rectangle(frame, (x1, y1), (x2, y2), bgr, 2)
-
         label = f"{det['class_name']} {det['confidence']:.2f}"
         (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
         cv2.rectangle(frame, (x1, y1 - th - 10), (x1 + tw + 4, y1), bgr, -1)
-        cv2.putText(
-            frame, label, (x1 + 2, y1 - 5),
-            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1,
-        )
+        cv2.putText(frame, label, (x1 + 2, y1 - 5),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
 
 
-# ---------------------------------------------------------------------------
-# Worker entry point
-# ---------------------------------------------------------------------------
-def stream_worker(
-    app,
-    stream_id: str,
-    source_type: str,
-    source_path: str,
-    stop_event: Event,
-    stream_store: dict,
-    store_lock,
-) -> None:
-    """
-    Main stream processing loop.  Designed to run as a daemon Thread.
-
-    Parameters
-    ----------
-    app          : Flask application instance (for app context in sub-tasks)
-    stream_id    : UUID string identifying this stream
-    source_type  : "webcam" | "rtsp" | "file"
-    source_path  : device index (int str) or URL/path
-    stop_event   : set() to signal the worker to stop
-    stream_store : shared dict holding per-stream state
-    store_lock   : threading.Lock protecting stream_store reads/writes
-    """
-    from flask import current_app
+def stream_worker(app, stream_id, source_type, source_path, stop_event, stream_store, store_lock):
+    with app.app_context():
+        yolo         = app.extensions["yolo_service"]
+        task_queue   = app.extensions["task_queue"]
+        jpeg_quality = app.config["STREAM_JPEG_QUALITY"]
+        cooldown_s   = app.config["VIOLATION_COOLDOWN_SECONDS"]
+        fps_limit    = app.config["FRAME_RATE_LIMIT"]
 
     vs: Optional[VideoStream] = None
-
-    with app.app_context():
-        yolo = app.extensions["yolo_service"]
-        task_queue = app.extensions["task_queue"]
-        jpeg_quality = app.config["STREAM_JPEG_QUALITY"]
-        cooldown_s = app.config["VIOLATION_COOLDOWN_SECONDS"]
-        fps_limit = app.config["FRAME_RATE_LIMIT"]
-        face_pipeline = app.extensions["face_pipeline"]
-
     try:
         src = int(source_path) if source_type == "webcam" else source_path
         vs = VideoStream(src=src, fps_limit=fps_limit).start()
-
-        time.sleep(0.5)  # give the capture thread a moment to fill self.frame
+        time.sleep(0.5)
 
         if not vs.stream.isOpened():
-            logger.error("Could not open video source: %s", src)
+            logger.error("Cannot open source: %s", src)
             return
 
-        fps_deque: deque = deque(maxlen=30)
-        # cooldown dict: (person_bbox_key, violation_type) → last_logged_timestamp
-        recent_violations: dict = {}
+        fps_deque:         deque = deque(maxlen=30)
+        recent_violations: dict  = {}   # cooldown tracking
         frame_count = 0
 
-        logger.info("Stream %s started (source=%s).", stream_id, src)
+        logger.info("Stream %s started (%s).", stream_id, src)
 
         while not stop_event.is_set():
             frame = vs.read()
@@ -159,15 +102,15 @@ def stream_worker(
                 time.sleep(0.05)
                 continue
 
-            t_start = time.monotonic()
+            t0 = time.monotonic()
 
-            # ── YOLO inference ────────────────────────────────────────────────
+            # ── YOLO ──────────────────────────────────────────────────────────
             with app.app_context():
                 detections = yolo.inference(frame)
 
             persons, violations = split_detections(detections)
 
-            # ── Violation association + job dispatch ──────────────────────────
+            # ── Dispatch violation jobs ────────────────────────────────────────
             if persons and violations:
                 for person in persons:
                     associated = [
@@ -177,74 +120,60 @@ def stream_worker(
                     if not associated:
                         continue
 
-                    # Extract head crop (BGR — top 35% of person bbox)
-                    head_crop_bgr = face_pipeline.get_head_crop(frame, person["bbox"])
+                    # Crop full person bbox — InsightFace detects face within it
+                    px1, py1, px2, py2 = map(int, person["bbox"])
+                    px1, py1 = max(0, px1), max(0, py1)
+                    px2, py2 = min(frame.shape[1], px2), min(frame.shape[0], py2)
+                    person_crop = frame[py1:py2, px1:px2]
 
-                    if head_crop_bgr is None:
+                    if person_crop.size == 0:
                         continue
 
-                    # Convert to RGB for the face task worker
-                    head_crop_rgb = cv2.cvtColor(head_crop_bgr, cv2.COLOR_BGR2RGB)
-
                     for viol in associated:
-                        # Cooldown key: approximate position bucket + violation type
-                        # Bucket the person's centre to avoid per-pixel uniqueness
                         cx = int((person["bbox"][0] + person["bbox"][2]) / 2 / 50)
                         cy = int((person["bbox"][1] + person["bbox"][3]) / 2 / 50)
-                        cooldown_key = (cx, cy, viol["class_name"])
+                        key = (cx, cy, viol["class_name"])
                         now = time.monotonic()
 
-                        if now - recent_violations.get(cooldown_key, 0) < cooldown_s:
+                        if now - recent_violations.get(key, 0) < cooldown_s:
                             continue
+                        recent_violations[key] = now
 
-                        recent_violations[cooldown_key] = now
-
-                        # Enqueue the violation log job (non-blocking)
-                        from tasks.queue import ViolationLogJob
-                        task_queue.put(ViolationLogJob(
+                        from tasks.queue import ViolationJob
+                        task_queue.put(ViolationJob(
                             stream_id=stream_id,
                             violation_type=viol["class_name"],
                             confidence=viol["confidence"],
-                            head_crop_bgr=head_crop_bgr.copy(),
+                            person_crop_bgr=person_crop.copy(),
                             person_bbox=person["bbox"],
                         ))
 
-            # ── Frame annotation + encode ─────────────────────────────────────
-            _annotate_frame(frame, detections)
-
-            ret, buffer = cv2.imencode(
-                ".jpg", frame,
-                [int(cv2.IMWRITE_JPEG_QUALITY), jpeg_quality],
-            )
+            # ── Encode ────────────────────────────────────────────────────────
+            _annotate(frame, detections)
+            ret, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), jpeg_quality])
             if not ret:
                 continue
 
             frame_count += 1
-            elapsed = time.monotonic() - t_start
+            elapsed = time.monotonic() - t0
             fps_deque.append(1.0 / elapsed if elapsed > 0 else 0.0)
-
-            violation_count = len([d for d in detections if not d["safe"]])
 
             with store_lock:
                 if stream_id in stream_store:
-                    stream_store[stream_id]["frame"] = buffer.tobytes()
+                    stream_store[stream_id]["frame"] = buf.tobytes()
                     stream_store[stream_id]["stats"].update({
-                        "fps": round(sum(fps_deque) / len(fps_deque), 1),
-                        "frame_count": frame_count,
-                        "violation_count": stream_store[stream_id]["stats"].get(
-                            "violation_count", 0
-                        ) + (1 if violation_count > 0 else 0),
+                        "fps":             round(sum(fps_deque) / len(fps_deque), 1),
+                        "frame_count":     frame_count,
+                        "violation_count": stream_store[stream_id]["stats"].get("violation_count", 0)
+                                           + (1 if any(not d["safe"] for d in detections) else 0),
                         "last_detections": detections,
-                        "resolution": [frame.shape[1], frame.shape[0]],
+                        "resolution":      [frame.shape[1], frame.shape[0]],
                     })
 
     except Exception as exc:
         import traceback
-        logger.error(
-            "Stream worker %s crashed: %s\n%s",
-            stream_id, exc, traceback.format_exc(),
-        )
+        logger.error("Stream %s crashed: %s\n%s", stream_id, exc, traceback.format_exc())
     finally:
         if vs:
             vs.stop()
-        logger.info("Stream worker %s stopped.", stream_id)
+        logger.info("Stream %s stopped.", stream_id)

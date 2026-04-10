@@ -1,23 +1,15 @@
 """
 Safion — Flask application factory
-===================================
-Usage:
-    from app import create_app
-    app = create_app()
-    app.run(...)
-
-Or via Flask CLI:
-    export FLASK_APP=app:create_app
-    flask run
 """
-
 import logging
 import os
+import uuid
 
-from flask import Flask, send_from_directory, jsonify
+from flask import Flask, send_from_directory, jsonify, request
 
 from config import Config
 from extensions import db, bcrypt, jwt
+from version import __version__, VERSION_STRING
 
 
 def create_app(config_class=Config) -> Flask:
@@ -32,6 +24,7 @@ def create_app(config_class=Config) -> Flask:
     _init_extensions(app)
     _create_directories(app)
     _register_blueprints(app)
+    _register_extra_routes(app)
     _register_frontend_catch_all(app)
     _register_error_handlers(app)
     _init_services(app)
@@ -39,10 +32,7 @@ def create_app(config_class=Config) -> Flask:
     return app
 
 
-# ---------------------------------------------------------------------------
-# Logging
-# ---------------------------------------------------------------------------
-def _configure_logging(app: Flask) -> None:
+def _configure_logging(app):
     level = logging.DEBUG if app.config.get("DEBUG") else logging.INFO
     logging.basicConfig(
         level=level,
@@ -51,47 +41,32 @@ def _configure_logging(app: Flask) -> None:
     )
 
 
-# ---------------------------------------------------------------------------
-# Flask extensions
-# ---------------------------------------------------------------------------
-def _init_extensions(app: Flask) -> None:
+def _init_extensions(app):
     db.init_app(app)
     bcrypt.init_app(app)
     jwt.init_app(app)
 
-    # JWT error handlers — return JSON instead of HTML
     @jwt.unauthorized_loader
-    def missing_token_callback(reason):
-        return jsonify({"error": "Authentication required.", "detail": reason}), 401
+    def missing_token(_r): return jsonify({"error": "Authentication required."}), 401
 
     @jwt.invalid_token_loader
-    def invalid_token_callback(reason):
-        return jsonify({"error": "Invalid token.", "detail": reason}), 401
+    def invalid_token(_r): return jsonify({"error": "Invalid token."}), 401
 
     @jwt.expired_token_loader
-    def expired_token_callback(jwt_header, jwt_data):
-        return jsonify({"error": "Token has expired."}), 401
+    def expired_token(_h, _d): return jsonify({"error": "Token expired."}), 401
 
     with app.app_context():
-        # Import all models so SQLAlchemy knows about them before create_all
-        import auth.models       # noqa: F401
-        import face.models       # noqa: F401
+        import auth.models   # noqa: F401
+        import face.models   # noqa: F401
         db.create_all()
 
 
-# ---------------------------------------------------------------------------
-# Required directories
-# ---------------------------------------------------------------------------
-def _create_directories(app: Flask) -> None:
-    for key in ("VIOLATIONS_IMAGE_DIR", "KNOWN_FACES_DIR", "TEMP_DIR"):
-        path = app.config[key]
-        os.makedirs(path, exist_ok=True)
+def _create_directories(app):
+    for key in ("VIOLATIONS_IMAGE_DIR", "TEMP_DIR"):
+        os.makedirs(app.config[key], exist_ok=True)
 
 
-# ---------------------------------------------------------------------------
-# Blueprints
-# ---------------------------------------------------------------------------
-def _register_blueprints(app: Flask) -> None:
+def _register_blueprints(app):
     from auth.routes import auth_bp
     from streams.routes import stream_bp
     from violations.routes import violations_bp
@@ -102,83 +77,116 @@ def _register_blueprints(app: Flask) -> None:
     app.register_blueprint(violations_bp)
     app.register_blueprint(face_bp)
 
-    # Health check — no auth required
+
+def _register_extra_routes(app):
     @app.get("/health")
     def health():
         yolo = app.extensions.get("yolo_service")
+        face = app.extensions.get("face_pipeline")
         return jsonify({
-            "status": "healthy",
-            "model_loaded": yolo.is_loaded if yolo else False,
-            "device": yolo._device if yolo else "unknown",
+            "status":        "healthy",
+            "version":       __version__,
+            "model_loaded":  yolo.is_loaded if yolo else False,
+            "face_ready":    face.is_ready  if face else False,
+            "device":        yolo._device   if yolo else "unknown",
         })
 
+    @app.get("/version")
+    def version():
+        return jsonify({
+            "version":        __version__,
+            "version_string": VERSION_STRING,
+        })
 
-# ---------------------------------------------------------------------------
-# Frontend catch-all (serve React build)
-# ---------------------------------------------------------------------------
-def _register_frontend_catch_all(app: Flask) -> None:
+    @app.post("/upload/video")
+    def upload_video():
+        if "video" not in request.files:
+            return jsonify({"error": "No video file (field: 'video')."}), 400
+        video_file = request.files["video"]
+        ext = os.path.splitext(video_file.filename)[1].lower()
+        allowed = {".mp4", ".avi", ".mkv", ".mov", ".webm"}
+        if ext not in allowed:
+            return jsonify({"error": f"Unsupported format. Allowed: {allowed}"}), 400
+        temp_dir = app.config["TEMP_DIR"]
+        os.makedirs(temp_dir, exist_ok=True)
+        filename = f"{uuid.uuid4().hex}{ext}"
+        save_path = os.path.join(temp_dir, filename)
+        video_file.save(save_path)
+        return jsonify({"path": save_path, "filename": filename}), 201
+
+    @app.get("/violators/unknown")
+    def get_unknown_violators():
+        """
+        Returns violations belonging to unconfirmed (auto-created) identities.
+        These are the Person_NNN auto-labels that operators haven't named yet.
+        The frontend Identity Recognition page uses this to let operators
+        select and name groups of violation images.
+        """
+        from face.models import Violation, FaceIdentity
+        unconfirmed_ids = [
+            i.id for i in FaceIdentity.query.filter_by(is_confirmed=False).all()
+        ]
+        if not unconfirmed_ids:
+            return jsonify([]), 200
+
+        unknowns = (
+            Violation.query
+            .filter(Violation.identity_id.in_(unconfirmed_ids))
+            .order_by(Violation.timestamp.desc())
+            .limit(200)
+            .all()
+        )
+        return jsonify([v.to_dict() for v in unknowns]), 200
+
+
+def _register_frontend_catch_all(app):
     @app.route("/", defaults={"path": ""})
     @app.route("/<path:path>")
-    def serve_frontend(path: str):
+    def serve_frontend(path):
         static = app.static_folder
         if path and os.path.exists(os.path.join(static, path)):
             return send_from_directory(static, path)
         return send_from_directory(static, "index.html")
 
 
-# ---------------------------------------------------------------------------
-# Error handlers
-# ---------------------------------------------------------------------------
-def _register_error_handlers(app: Flask) -> None:
+def _register_error_handlers(app):
     @app.errorhandler(404)
-    def not_found(e):
-        return jsonify({"error": "Resource not found."}), 404
+    def not_found(_e):     return jsonify({"error": "Not found."}), 404
 
     @app.errorhandler(405)
-    def method_not_allowed(e):
-        return jsonify({"error": "Method not allowed."}), 405
+    def not_allowed(_e):   return jsonify({"error": "Method not allowed."}), 405
 
     @app.errorhandler(500)
-    def internal_error(e):
-        return jsonify({"error": "Internal server error."}), 500
+    def server_error(_e):  return jsonify({"error": "Internal server error."}), 500
 
 
-# ---------------------------------------------------------------------------
-# Service initialisation (YOLO, face pipeline, task queue, stream manager)
-# ---------------------------------------------------------------------------
-def _init_services(app: Flask) -> None:
+def _init_services(app):
     from detection.yolo_service import YOLOService
-    from face.pipeline import FaceRecognitionPipeline
+    from face.pipeline import InsightFacePipeline
     from tasks.queue import TaskQueue
     from streams.manager import StreamManager
 
-    # ── YOLO ─────────────────────────────────────────────────────────────────
+    # YOLO — unchanged
     yolo = YOLOService()
     yolo.init_app(app)
     app.extensions["yolo_service"] = yolo
 
-    # ── Face recognition pipeline ─────────────────────────────────────────────
-    pipeline = FaceRecognitionPipeline(app.config)
+    # InsightFace pipeline
+    pipeline = InsightFacePipeline(app.config)
+    pipeline.init_app(app)
     app.extensions["face_pipeline"] = pipeline
-
     with app.app_context():
         pipeline.reload_cache()
 
-    # ── Task queue (async face matching + violation logging) ──────────────────
+    # Async task queue
     task_queue = TaskQueue()
     task_queue.init_app(app)
     app.extensions["task_queue"] = task_queue
 
-    # ── Stream manager ────────────────────────────────────────────────────────
+    # Stream manager
     stream_manager = StreamManager()
     stream_manager.init_app(app)
     app.extensions["stream_manager"] = stream_manager
 
-    # ── Shutdown hook ─────────────────────────────────────────────────────────
     import atexit
-
-    def _shutdown():
-        stream_manager.stop_all()
-        task_queue.shutdown()
-
-    atexit.register(_shutdown)
+    atexit.register(lambda: (stream_manager.stop_all(), task_queue.shutdown()))

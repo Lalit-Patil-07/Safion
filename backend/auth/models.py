@@ -5,6 +5,7 @@ from extensions import db
 
 class User(db.Model):
     __tablename__ = "users"
+    __table_args__ = {"extend_existing": True}
 
     id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     username = db.Column(db.String(80), unique=True, nullable=False, index=True)
