@@ -1,18 +1,38 @@
 """
-Stream worker — YOLO detection + violation dispatch
-===================================================
-Responsibilities
-  - Threaded frame capture
-  - YOLO inference (PPE detection)
-  - Person↔violation association
-  - Crop person bbox, enqueue ViolationJob (non-blocking)
-  - Annotate frame + JPEG encode for MJPEG delivery
+Stream worker — YOLO + IoU tracking + violation dispatch
+=========================================================
+New in this version: FaceTracker sits between YOLO detection and the
+face pipeline.  Embeddings are accumulated per track (not per frame),
+and identity assignment is delayed until TRACK_MIN_FRAMES frames and
+TRACK_MIN_EMBEDDINGS embeddings have been collected.
 
-NOT responsible for
-  - Face recognition  (runs in TaskQueue workers)
-  - Database writes   (runs in TaskQueue workers)
-  - Head-cropping     (InsightFace handles face detection internally)
+Flow
+----
+Frame → YOLO → persons[] → FaceTracker.update(bbox) → Track
+                                                         │
+                                ┌────────────────────────┘
+                                │
+                track.frames_lost == 0 (currently visible)?
+                                │
+                         embed_crop() on person crop
+                                │
+                         track.add_embedding(emb, quality)
+                                │
+              tracker.is_confirmed(track)?   [≥ min_frames AND ≥ min_embeddings]
+                     │                │
+                    No               Yes
+                     │                └── track.identity_id already set?
+                     │                          │              │
+                     │                         Yes            No
+                     │                          │              └── match_or_create(mean_emb)
+                     │                          │                  set track.identity_id
+                     │
+               (skip — accumulating)
+                                │
+                    ViolationJob for associated violations
+                    using track.identity_id + track-level cooldown
 """
+
 import logging
 import time
 from collections import deque
@@ -23,6 +43,7 @@ import cv2
 import numpy as np
 
 from detection.association import split_detections, check_association
+from streams.tracker import FaceTracker
 
 logger = logging.getLogger(__name__)
 
@@ -74,25 +95,32 @@ def _annotate(frame: np.ndarray, detections: list[dict]) -> None:
 
 def stream_worker(app, stream_id, source_type, source_path, stop_event, stream_store, store_lock):
     with app.app_context():
-        yolo         = app.extensions["yolo_service"]
-        task_queue   = app.extensions["task_queue"]
-        jpeg_quality = app.config["STREAM_JPEG_QUALITY"]
-        cooldown_s   = app.config["VIOLATION_COOLDOWN_SECONDS"]
-        fps_limit    = app.config["FRAME_RATE_LIMIT"]
+        yolo          = app.extensions["yolo_service"]
+        task_queue    = app.extensions["task_queue"]
+        pipeline      = app.extensions["face_pipeline"]
+        jpeg_quality  = app.config["STREAM_JPEG_QUALITY"]
+        violation_cd  = app.config["VIOLATION_COOLDOWN_SECONDS"]
+        fps_limit     = app.config["FRAME_RATE_LIMIT"]
+
+        tracker = FaceTracker(
+            iou_threshold  = app.config.get("TRACK_IOU_THRESHOLD",  0.30),
+            max_lost       = app.config.get("TRACK_MAX_LOST",       10),
+            min_frames     = app.config.get("TRACK_MIN_FRAMES",     3),
+            min_embeddings = app.config.get("TRACK_MIN_EMBEDDINGS", 3),
+        )
 
     vs: Optional[VideoStream] = None
     try:
         src = int(source_path) if source_type == "webcam" else source_path
-        vs = VideoStream(src=src, fps_limit=fps_limit).start()
+        vs  = VideoStream(src=src, fps_limit=fps_limit).start()
         time.sleep(0.5)
 
         if not vs.stream.isOpened():
             logger.error("Cannot open source: %s", src)
             return
 
-        fps_deque:         deque = deque(maxlen=30)
-        recent_violations: dict  = {}   # cooldown tracking
-        frame_count = 0
+        fps_deque   : deque = deque(maxlen=30)
+        frame_count : int   = 0
 
         logger.info("Stream %s started (%s).", stream_id, src)
 
@@ -110,47 +138,92 @@ def stream_worker(app, stream_id, source_type, source_path, stop_event, stream_s
 
             persons, violations = split_detections(detections)
 
-            # ── Dispatch violation jobs ────────────────────────────────────────
-            if persons and violations:
-                for person in persons:
-                    associated = [
-                        v for v in violations
-                        if check_association(person["bbox"], v["bbox"])
-                    ]
-                    if not associated:
-                        continue
+            # ── Per-person tracking + embedding ───────────────────────────────
+            active_bboxes: list[list[float]] = []
 
-                    # Crop full person bbox — InsightFace detects face within it
-                    px1, py1, px2, py2 = map(int, person["bbox"])
-                    px1, py1 = max(0, px1), max(0, py1)
-                    px2, py2 = min(frame.shape[1], px2), min(frame.shape[0], py2)
-                    person_crop = frame[py1:py2, px1:px2]
+            for person in persons:
+                bbox = person["bbox"]
+                active_bboxes.append(bbox)
 
-                    if person_crop.size == 0:
-                        continue
+                # Update (or create) a track for this detection
+                track = tracker.update(bbox)
 
-                    for viol in associated:
-                        cx = int((person["bbox"][0] + person["bbox"][2]) / 2 / 50)
-                        cy = int((person["bbox"][1] + person["bbox"][3]) / 2 / 50)
-                        key = (cx, cy, viol["class_name"])
-                        now = time.monotonic()
+                # Extract face embedding from person crop every frame
+                # (cheap when face not detected — embed_crop returns [])
+                px1, py1, px2, py2 = map(int, bbox)
+                px1, py1 = max(0, px1), max(0, py1)
+                px2, py2 = min(frame.shape[1], px2), min(frame.shape[0], py2)
+                crop = frame[py1:py2, px1:px2]
 
-                        if now - recent_violations.get(key, 0) < cooldown_s:
-                            continue
-                        recent_violations[key] = now
+                if crop.size == 0:
+                    continue
 
-                        from tasks.queue import ViolationJob
-                        task_queue.put(ViolationJob(
-                            stream_id=stream_id,
-                            violation_type=viol["class_name"],
-                            confidence=viol["confidence"],
-                            person_crop_bgr=person_crop.copy(),
-                            person_bbox=person["bbox"],
-                        ))
+                with app.app_context():
+                    faces = pipeline.embed_crop(crop)
+
+                if faces:
+                    best = max(faces, key=lambda f: f["quality_score"])
+                    track.add_embedding(best["embedding"], best["quality_score"])
+
+                # ── Identity assignment (delayed until confirmed) ───────────
+                if tracker.is_confirmed(track) and track.identity_id is None:
+                    # Use the quality-weighted mean embedding for matching —
+                    # more stable than any single frame
+                    mean_emb = track.mean_embedding
+                    if mean_emb is not None:
+                        with app.app_context():
+                            identity_id, label, score = pipeline.match_or_create(
+                                mean_emb,
+                                quality=track.best_quality,
+                                stream_id=stream_id,
+                            )
+                        track.identity_id    = identity_id
+                        track.identity_label = label
+                        logger.debug(
+                            "Track %d confirmed → identity '%s' (score=%.3f, frames=%d, embs=%d)",
+                            track.track_id, label, score,
+                            track.frames_seen, track.n_embeddings,
+                        )
+
+                # ── Violation dispatch (only for confirmed tracks) ──────────
+                if track.identity_id is None:
+                    continue  # still accumulating — don't log violations yet
+
+                associated = [
+                    v for v in violations
+                    if check_association(bbox, v["bbox"])
+                ]
+                if not associated:
+                    continue
+
+                now = time.monotonic()
+                # Track-level cooldown — one violation log per identity per window
+                if now - track.last_violation_time < violation_cd:
+                    continue
+
+                track.last_violation_time = now
+
+                for viol in associated:
+                    from tasks.queue import ViolationJob
+                    task_queue.put(ViolationJob(
+                        stream_id=stream_id,
+                        violation_type=viol["class_name"],
+                        confidence=viol["confidence"],
+                        person_crop_bgr=crop.copy(),
+                        person_bbox=bbox,
+                        # Pass resolved identity directly — skip match_or_create in worker
+                        identity_id=track.identity_id,
+                        identity_label=track.identity_label,
+                    ))
+
+            # Mark tracks not seen this frame
+            tracker.mark_missing(active_bboxes)
 
             # ── Encode ────────────────────────────────────────────────────────
             _annotate(frame, detections)
-            ret, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), jpeg_quality])
+            ret, buf = cv2.imencode(
+                ".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), jpeg_quality]
+            )
             if not ret:
                 continue
 
