@@ -43,20 +43,43 @@ class Config:
     INSIGHTFACE_MODEL: str = os.environ.get("INSIGHTFACE_MODEL", "buffalo_l")
     # 0.55 is the reliable lower bound for ArcFace same-person on occluded surveillance footage
     # 0.45 (old default) was too low — caused identity fragmentation
-    IDENTITY_MATCH_THRESHOLD: float = float(os.environ.get("IDENTITY_MATCH_THRESHOLD", "0.55"))
+    # ArcFace cosine similarity for same person in surveillance video:
+    #   clean frontal pair:       0.70 – 0.92
+    #   frontal vs 30° turn:      0.50 – 0.65
+    #   frontal vs 45° turn:      0.38 – 0.52
+    #   motion-blurred frame:     0.35 – 0.50
+    # 0.55 was calibrated for clean photos — too strict for video.
+    # 0.40 captures the 30–45° turn range with minimal false positives.
+    IDENTITY_MATCH_THRESHOLD: float = float(os.environ.get("IDENTITY_MATCH_THRESHOLD", "0.40"))
     # Minimum combined quality score to accept an embedding (det_score × area_ratio)
-    EMBEDDING_QUALITY_MIN: float = float(os.environ.get("EMBEDDING_QUALITY_MIN", "0.45"))
+    # Lowered to 0.30 — a det_score=0.70 face at 20% crop area scores 0.35.
+    # Too strict a quality gate silently drops valid embeddings and starves the tracker.
+    EMBEDDING_QUALITY_MIN: float = float(os.environ.get("EMBEDDING_QUALITY_MIN", "0.30"))
 
     # ── Multi-prototype identity model ────────────────────────────────────────
     # Max prototypes kept per identity in the live cache (K in K-prototype model)
     MAX_PROTOTYPES: int = int(os.environ.get("MAX_PROTOTYPES", "5"))
     # Cosine similarity above which a new embedding merges into an existing prototype
     # rather than creating a new one (same pose / lighting condition)
-    PROTO_MERGE_THRESHOLD: float = float(os.environ.get("PROTO_MERGE_THRESHOLD", "0.80"))
+    # Lowered: two embeddings from consecutive frames of the same person score ~0.70–0.85.
+    # 0.70 ensures nearby frames merge into the same prototype.
+    PROTO_MERGE_THRESHOLD: float = float(os.environ.get("PROTO_MERGE_THRESHOLD", "0.70"))
+
+    # ── Face tracker (temporal consistency) ─────────────────────────────────
+    # Frames before a track is considered confirmed (reduces premature identity creation)
+    TRACK_MIN_FRAMES: int = int(os.environ.get("TRACK_MIN_FRAMES", "3"))
+    # Max frames a track can be missing before it's evicted (IoU-based)
+    TRACK_MAX_LOST: int = int(os.environ.get("TRACK_MAX_LOST", "10"))
+    # IoU threshold for linking a detection to an existing track
+    TRACK_IOU_THRESHOLD: float = float(os.environ.get("TRACK_IOU_THRESHOLD", "0.30"))
+    # Min embeddings before identity is created for a confirmed track
+    TRACK_MIN_EMBEDDINGS: int = int(os.environ.get("TRACK_MIN_EMBEDDINGS", "3"))
 
     # ── Merge suggestion engine ───────────────────────────────────────────────
     # Minimum cross-identity similarity to surface as a merge suggestion
-    SUGGESTION_THRESHOLD: float = float(os.environ.get("SUGGESTION_THRESHOLD", "0.68"))
+    # Merge suggestion threshold — lowered to match video-domain similarity range.
+    # Two singleton identities of the same person typically score 0.45–0.65.
+    SUGGESTION_THRESHOLD: float = float(os.environ.get("SUGGESTION_THRESHOLD", "0.50"))
     # Maximum suggestions returned per call
     SUGGESTION_MAX_RESULTS: int = int(os.environ.get("SUGGESTION_MAX_RESULTS", "30"))
     # Minimum cosine similarity to update centroid (below this = outlier, stored but ignored)
