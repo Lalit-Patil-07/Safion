@@ -378,3 +378,128 @@ def review_queue():
         results.append(d)
 
     return jsonify(results), 200
+
+
+# ── Merge suggestions ─────────────────────────────────────────────────────────
+@face_bp.get("/merge-suggestions")
+def get_merge_suggestions():
+    """
+    Return ranked merge suggestions for unconfirmed identities.
+    Generated on demand from the live cache — always fresh, no DB reads.
+
+    Query params:
+        threshold (float, default from config)
+        limit     (int,   default from config)
+    """
+    from face.similarity import generate_merge_suggestions
+
+    pipeline  = _pipeline()
+    threshold = request.args.get(
+        "threshold", current_app.config.get("SUGGESTION_THRESHOLD", 0.68), type=float
+    )
+    limit = request.args.get(
+        "limit", current_app.config.get("SUGGESTION_MAX_RESULTS", 30), type=int
+    )
+
+    snapshot    = pipeline._snapshot()
+    suggestions = generate_merge_suggestions(snapshot, threshold=threshold, max_results=limit)
+
+    # Enrich each suggestion with thumbnail paths for the UI
+    for s in suggestions:
+        for key in ("identity_a_id", "identity_b_id"):
+            identity = FaceIdentity.query.get(s[key])
+            thumb_key = "thumbnail_a" if key == "identity_a_id" else "thumbnail_b"
+            s[thumb_key] = (
+                f"/violations/image/{identity.thumbnail_filename}"
+                if identity and identity.thumbnail_filename else None
+            )
+
+    return jsonify({
+        "suggestions": suggestions,
+        "count":       len(suggestions),
+        "threshold":   threshold,
+    }), 200
+
+
+# ── Face samples for an identity ──────────────────────────────────────────────
+@face_bp.get("/identity/<identity_id>/samples")
+def get_identity_samples(identity_id: str):
+    """
+    Return the top-N clearest violation images for this identity, ordered by
+    match_score DESC.  Used by the detail panel to display multiple face views.
+    """
+    identity = FaceIdentity.query.get(identity_id)
+    if not identity:
+        return jsonify({"error": "Identity not found."}), 404
+
+    samples = (
+        Violation.query
+        .filter_by(identity_id=identity_id)
+        .filter(Violation.image_filename.isnot(None))
+        .filter(Violation.match_score.isnot(None))
+        .order_by(Violation.match_score.desc())
+        .limit(6)
+        .all()
+    )
+
+    # Fall back to most recent if no match_score available
+    if not samples:
+        samples = (
+            Violation.query
+            .filter_by(identity_id=identity_id)
+            .filter(Violation.image_filename.isnot(None))
+            .order_by(Violation.timestamp.desc())
+            .limit(6)
+            .all()
+        )
+
+    return jsonify([
+        {
+            "image_path":  f"/violations/image/{v.image_filename}",
+            "match_score": round(v.match_score, 3) if v.match_score else None,
+            "timestamp":   v.timestamp.isoformat(),
+        }
+        for v in samples
+    ]), 200
+
+
+# ── Cross-identity similarity ─────────────────────────────────────────────────
+@face_bp.get("/identity/<identity_id>/similarity")
+def get_identity_similarity(identity_id: str):
+    """
+    Return the top-N most similar identities to the given one.
+    Useful for the detail panel 'Similar to' section.
+
+    Query params:
+        limit (int, default 5)
+    """
+    from face.similarity import identity_similarity
+
+    limit    = request.args.get("limit", 5, type=int)
+    pipeline = _pipeline()
+    snapshot = pipeline._snapshot()
+
+    entry = snapshot.get(identity_id)
+    if not entry:
+        return jsonify({"similar": []}), 200
+
+    results = []
+    for other_id, other_data in snapshot.items():
+        if other_id == identity_id:
+            continue
+        sim = identity_similarity(entry, other_data)
+        if sim > 0.40:
+            other_identity = FaceIdentity.query.get(other_id)
+            results.append({
+                "identity_id":  other_id,
+                "label":        other_data["label"],
+                "is_confirmed": other_data.get("is_confirmed", False),
+                "similarity":   round(sim, 3),
+                "thumbnail":    (
+                    f"/violations/image/{other_identity.thumbnail_filename}"
+                    if other_identity and other_identity.thumbnail_filename else None
+                ),
+            })
+
+    results.sort(key=lambda x: x["similarity"], reverse=True)
+    return jsonify({"similar": results[:limit]}), 200
