@@ -5,7 +5,7 @@ import {
   X, Tv, Plus, Trash2, Maximize, Minimize, Users, ChevronLeft,
   ChevronRight, Search, GitMerge, Edit3, Clock, Activity,
   BarChart2, Eye, Check, AlertTriangle, RefreshCw, Inbox,
-  Star, TrendingUp, Filter
+  Star, TrendingUp, Filter, Zap, Link2
 } from 'lucide-react';
 
 const API = '';
@@ -79,15 +79,16 @@ const ImageModal = ({ imageUrl, onClose }) => {
 
 // ── Sidebar ───────────────────────────────────────────────────────────────────
 const NAV = [
-  { id: 'dashboard',  icon: BarChart2,    label: 'Dashboard' },
-  { id: 'identities', icon: Users,        label: 'Identities' },
-  { id: 'review',     icon: Inbox,        label: 'Review Queue' },
-  { id: 'violations', icon: AlertTriangle,label: 'Violations' },
-  { id: 'monitor',    icon: Tv,           label: 'Live Monitor' },
-  { id: 'settings',   icon: Settings,     label: 'Settings' },
+  { id: 'dashboard',   icon: BarChart2,    label: 'Dashboard' },
+  { id: 'identities',  icon: Users,        label: 'Identities' },
+  { id: 'review',      icon: Inbox,        label: 'Review Queue' },
+  { id: 'suggestions', icon: Zap,          label: 'Merge Suggestions' },
+  { id: 'violations',  icon: AlertTriangle,label: 'Violations' },
+  { id: 'monitor',     icon: Tv,           label: 'Live Monitor' },
+  { id: 'settings',    icon: Settings,     label: 'Settings' },
 ];
 
-const Sidebar = ({ view, setView, open, setOpen, serverStatus, reviewCount }) => (
+const Sidebar = ({ view, setView, open, setOpen, serverStatus, reviewCount, suggestionsCount }) => (
   <>
     {open && <div className="fixed inset-0 bg-black/50 z-40 lg:hidden" onClick={() => setOpen(false)} />}
     <aside className={`fixed top-0 left-0 h-full bg-card-secondary border-r border-border z-50 transition-all duration-300
@@ -123,6 +124,12 @@ const Sidebar = ({ view, setView, open, setOpen, serverStatus, reviewCount }) =>
                 <span className={`${open ? 'ml-auto' : 'absolute top-1 right-1'} text-xs px-1.5 py-0.5 rounded-full font-bold
                                   ${view === id ? 'bg-white text-primary' : 'bg-amber-500 text-white'}`}>
                   {reviewCount > 99 ? '99+' : reviewCount}
+                </span>
+              )}
+              {id === 'suggestions' && suggestionsCount > 0 && (
+                <span className={`${open ? 'ml-auto' : 'absolute top-1 right-1'} text-xs px-1.5 py-0.5 rounded-full font-bold
+                                  ${view === id ? 'bg-white text-primary' : 'bg-blue-500 text-white'}`}>
+                  {suggestionsCount > 99 ? '99+' : suggestionsCount}
                 </span>
               )}
             </button>
@@ -423,14 +430,21 @@ const IdentityDetail = ({ identity, onClose, onModalImage, onRefresh }) => {
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(false);
   const [newLabel,setNewLabel]= useState('');
+  const [samples, setSamples] = useState([]);
+  const [similar, setSimilar] = useState([]);
 
   const load = useCallback(() => {
     setLoading(true);
-    fetch(`${API}/face/identity/${identity.id}/violations`)
-      .then(r => r.json())
-      .then(d => { setData(d); setNewLabel(d.identity?.label || ''); })
-      .catch(() => {})
-      .finally(() => setLoading(false));
+    Promise.all([
+      fetch(`${API}/face/identity/${identity.id}/violations`).then(r => r.json()),
+      fetch(`${API}/face/identity/${identity.id}/samples`).then(r => r.json()).catch(() => []),
+      fetch(`${API}/face/identity/${identity.id}/similarity?limit=3`).then(r => r.json()).catch(() => ({ similar: [] })),
+    ]).then(([vdata, sampleData, simData]) => {
+      setData(vdata);
+      setNewLabel(vdata.identity?.label || '');
+      setSamples(Array.isArray(sampleData) ? sampleData : []);
+      setSimilar(simData.similar || []);
+    }).catch(() => {}).finally(() => setLoading(false));
   }, [identity.id]);
 
   useEffect(() => { load(); }, [load]);
@@ -482,6 +496,29 @@ const IdentityDetail = ({ identity, onClose, onModalImage, onRefresh }) => {
               </div>
             </div>
 
+            {/* Face samples — multiple views */}
+            {samples.length > 0 && (
+              <div>
+                <div className="text-xs font-semibold text-text-secondary uppercase tracking-wide mb-2">
+                  Face samples (highest confidence)
+                </div>
+                <div className="flex gap-2 flex-wrap">
+                  {samples.map((s, i) => (
+                    <div key={i} className="relative group">
+                      <img src={`${API}${s.image_path}`} alt={`sample ${i + 1}`}
+                           className="w-16 h-16 object-cover rounded-xl cursor-pointer hover:opacity-80 border border-border"
+                           onClick={() => onModalImage(`${API}${s.image_path}`)} />
+                      {s.match_score != null && (
+                        <span className="absolute bottom-0.5 right-0.5 text-xs bg-black/70 text-white px-1 rounded text-[10px]">
+                          {Math.round(s.match_score * 100)}%
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* Confidence */}
             <div className="bg-card-secondary rounded-xl p-4">
               <div className="flex items-center justify-between mb-2">
@@ -490,8 +527,7 @@ const IdentityDetail = ({ identity, onClose, onModalImage, onRefresh }) => {
               </div>
               <ConfidenceBar score={id?.identity_confidence} showLabel />
               <p className="text-xs text-text-secondary mt-2">
-                Based on how consistently this person's face matches across detections.
-                Higher = more stable identity.
+                Based on match consistency across detections. Higher = more stable identity.
               </p>
             </div>
 
@@ -508,6 +544,33 @@ const IdentityDetail = ({ identity, onClose, onModalImage, onRefresh }) => {
                 </div>
               ))}
             </div>
+
+            {/* Similar identities */}
+            {similar.length > 0 && (
+              <div>
+                <div className="text-xs font-semibold text-text-secondary uppercase tracking-wide mb-2 flex items-center gap-1.5">
+                  <Link2 size={12} /> Potentially same person
+                </div>
+                <div className="space-y-2">
+                  {similar.map(s => (
+                    <div key={s.identity_id}
+                         className="flex items-center gap-3 p-2.5 bg-card-secondary rounded-xl border border-border">
+                      <FaceAvatar src={s.thumbnail} label={s.label} size="sm" />
+                      <div className="flex-1 min-w-0">
+                        <div className="text-xs font-semibold text-text truncate">{s.label}</div>
+                        <StatusBadge is_confirmed={s.is_confirmed} />
+                      </div>
+                      <div className="text-xs font-bold text-amber-600 flex-shrink-0">
+                        {Math.round(s.similarity * 100)}% similar
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <p className="text-xs text-text-secondary mt-2">
+                  Consider merging if these are the same person. Use the Merge Suggestions page for bulk review.
+                </p>
+              </div>
+            )}
 
             {/* Violation type breakdown */}
             {data?.type_counts && Object.keys(data.type_counts).length > 0 && (
@@ -557,6 +620,153 @@ const IdentityDetail = ({ identity, onClose, onModalImage, onRefresh }) => {
           </div>
         )}
       </div>
+    </div>
+  );
+};
+
+// ── Merge Suggestions Panel ───────────────────────────────────────────────────
+const MergeSuggestionsPage = ({ onCountChange }) => {
+  const [data,     setData]     = useState(null);
+  const [loading,  setLoading]  = useState(true);
+  const [dismissed,setDismissed]= useState(new Set());
+  const [merging,  setMerging]  = useState(null);  // pair key being merged
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const r = await fetch(`${API}/face/merge-suggestions`);
+    const d = await r.json().catch(() => ({ suggestions: [] }));
+    setData(d);
+    const visible = (d.suggestions || []).filter(s => !dismissed.has(`${s.identity_a_id}:${s.identity_b_id}`));
+    onCountChange(visible.length);
+    setLoading(false);
+  }, [dismissed, onCountChange]);
+
+  useEffect(() => { load(); }, []);
+
+  const handleMerge = async (s) => {
+    const key = `${s.identity_a_id}:${s.identity_b_id}`;
+    setMerging(key);
+    try {
+      const r = await fetch(`${API}/face/identity/merge`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source_id: s.identity_a_id, target_id: s.identity_b_id }),
+      });
+      if (r.ok) {
+        setDismissed(prev => new Set([...prev, key]));
+        onCountChange(prev => Math.max(0, prev - 1));
+      }
+    } finally { setMerging(null); }
+  };
+
+  const handleDismiss = (s) => {
+    const key = `${s.identity_a_id}:${s.identity_b_id}`;
+    setDismissed(prev => new Set([...prev, key]));
+    onCountChange(prev => Math.max(0, prev - 1));
+  };
+
+  const visible = (data?.suggestions || []).filter(
+    s => !dismissed.has(`${s.identity_a_id}:${s.identity_b_id}`)
+  );
+
+  const simColor = (sim) => sim >= 0.85 ? '#22c55e' : sim >= 0.75 ? '#f59e0b' : '#6b7280';
+
+  return (
+    <div className="p-6">
+      <div className="flex items-center justify-between mb-5">
+        <div>
+          <h2 className="text-2xl font-bold text-text">Merge Suggestions</h2>
+          <p className="text-sm text-text-secondary">
+            {loading ? 'Analysing…' : `${visible.length} pair${visible.length !== 1 ? 's' : ''} may be the same person`}
+          </p>
+        </div>
+        <button onClick={load} className="p-2 border border-border rounded-lg hover:bg-border text-text-secondary">
+          <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
+        </button>
+      </div>
+
+      {/* Explanation */}
+      <div className="mb-5 p-4 bg-blue-50 border border-blue-200 rounded-xl text-sm text-blue-800">
+        <strong>How this works:</strong> The system compares identities using multiple face prototypes.
+        Pairs shown here have high embedding similarity and may represent the same physical person.
+        Review and merge — or dismiss if incorrect.
+      </div>
+
+      {loading ? (
+        <div className="flex justify-center py-20"><Loader size={32} className="animate-spin text-text-secondary" /></div>
+      ) : visible.length === 0 ? (
+        <div className="flex flex-col items-center py-20 text-center bg-card border border-border rounded-xl">
+          <Zap size={44} className="text-text-secondary mb-3" />
+          <p className="text-base font-semibold text-text">No suggestions right now</p>
+          <p className="text-sm text-text-secondary">
+            All identities appear distinct, or not enough data has been collected yet.
+          </p>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {visible.map(s => {
+            const key = `${s.identity_a_id}:${s.identity_b_id}`;
+            const isMerging = merging === key;
+            return (
+              <div key={key}
+                   className="bg-card border border-border rounded-xl p-4 hover:border-primary/30 transition-all">
+                {/* Similarity score header */}
+                <div className="flex items-center justify-between mb-4">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-bold" style={{ color: simColor(s.similarity) }}>
+                      {Math.round(s.similarity * 100)}% similar
+                    </span>
+                    <div className="w-24 h-1.5 bg-card-secondary rounded-full overflow-hidden">
+                      <div className="h-full rounded-full" style={{
+                        width: `${s.similarity * 100}%`,
+                        backgroundColor: simColor(s.similarity),
+                      }} />
+                    </div>
+                  </div>
+                  <span className="text-xs text-text-secondary">
+                    {s.similarity >= 0.85 ? 'Very likely same person' : s.similarity >= 0.75 ? 'Possibly same person' : 'May be same person'}
+                  </span>
+                </div>
+
+                {/* Side-by-side comparison */}
+                <div className="grid grid-cols-2 gap-4 mb-4">
+                  {[
+                    { id: s.identity_a_id, label: s.identity_a_label, thumb: s.thumbnail_a },
+                    { id: s.identity_b_id, label: s.identity_b_label, thumb: s.thumbnail_b },
+                  ].map((person, i) => (
+                    <div key={i} className="flex items-center gap-3 p-3 bg-card-secondary rounded-xl">
+                      <FaceAvatar src={person.thumb} label={person.label} />
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-semibold text-text truncate">{person.label}</div>
+                        <div className="text-xs text-text-secondary">ID: {person.id.slice(0, 8)}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Actions */}
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => handleMerge(s)}
+                    disabled={isMerging}
+                    className="flex items-center gap-1.5 px-4 py-2 bg-primary text-white text-sm font-semibold rounded-lg hover:opacity-90 disabled:opacity-50 transition-all">
+                    {isMerging ? <Loader size={13} className="animate-spin" /> : <GitMerge size={13} />}
+                    Merge A → B
+                  </button>
+                  <button
+                    onClick={() => handleDismiss(s)}
+                    className="flex items-center gap-1.5 px-4 py-2 bg-card-secondary border border-border text-sm text-text-secondary rounded-lg hover:bg-border transition-all">
+                    <X size={13} /> Not the same
+                  </button>
+                  <p className="text-xs text-text-secondary ml-auto">
+                    Merge archives "{s.identity_a_label}" into "{s.identity_b_label}"
+                  </p>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 };
@@ -919,7 +1129,8 @@ export default function App() {
   const [activeStreams, setActiveStreams]= useState({});
   const [modalImage, setModalImage]     = useState(null);
   const [zoomedId, setZoomedId]         = useState(null);
-  const [reviewCount, setReviewCount]   = useState(0);
+  const [reviewCount, setReviewCount]       = useState(0);
+  const [suggestionsCount, setSuggestionsCount] = useState(0);
   const fileInputRef = useRef(null);
 
   const checkHealth = useCallback(async () => {
@@ -932,11 +1143,15 @@ export default function App() {
 
   useEffect(() => { checkHealth(); const i = setInterval(checkHealth, 10000); return () => clearInterval(i); }, [checkHealth]);
 
-  // Seed review badge on load
+  // Seed review + suggestion badge on load
   useEffect(() => {
     fetch(`${API}/face/review-queue`)
       .then(r => r.json())
       .then(d => setReviewCount(Array.isArray(d) ? d.length : 0))
+      .catch(() => {});
+    fetch(`${API}/face/merge-suggestions`)
+      .then(r => r.json())
+      .then(d => setSuggestionsCount((d.suggestions || []).length))
       .catch(() => {});
   }, []);
 
@@ -1006,6 +1221,7 @@ export default function App() {
       case 'dashboard':  return <DashboardPage setView={setView} />;
       case 'identities': return <IdentityManagementPage onModalImage={setModalImage} />;
       case 'review':     return <ReviewQueuePage onCountChange={setReviewCount} onModalImage={setModalImage} />;
+      case 'suggestions': return <MergeSuggestionsPage onCountChange={setSuggestionsCount} />;
       case 'violations': return <ViolationLogPage onModalImage={setModalImage} />;
       case 'monitor':    return (
         <LiveMonitorPage activeStreams={activeStreams} stopStream={stopStream} startStream={startStream}
@@ -1025,7 +1241,7 @@ export default function App() {
     <div className="min-h-screen bg-background text-text font-sans flex">
       <ImageModal imageUrl={modalImage} onClose={() => setModalImage(null)} />
       <Sidebar view={view} setView={setView} open={sidebarOpen} setOpen={setSidebarOpen}
-               serverStatus={serverStatus} reviewCount={reviewCount} />
+               serverStatus={serverStatus} reviewCount={reviewCount} suggestionsCount={suggestionsCount} />
       <main className={`flex-1 h-screen overflow-y-auto transition-all duration-300 ${sidebarOpen ? 'lg:ml-56' : 'lg:ml-16'}`}>
         {renderPage()}
       </main>
