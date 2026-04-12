@@ -1,206 +1,188 @@
 """
-TaskQueue
-=========
-Async worker pool with two-layer violation deduplication.
+Identity consolidation — quality-weighted DBSCAN
+=================================================
 
-Layer 1 (worker.py, position-based): fast, prevents queue flooding.
-Layer 2 (here, identity-based): authoritative, prevents DB duplicates
-  after face recognition resolves the identity.
+Changes from v1
+---------------
+1. ARCHIVE instead of delete
+   Merged source identities are archived (is_archived=True, merged_into_id set).
+   Audit trail is preserved.  Routes.py "delete" already archives — clustering
+   now does the same.
+
+2. QUALITY-WEIGHTED distance matrix
+   Low-quality embeddings (quality_score < QUALITY_ANCHOR_MIN) are included in
+   the clustering run but get their distances up-weighted — effectively pushing
+   them toward the edges of clusters rather than anchoring cluster centroids.
+   This prevents blurry detections from mislocating cluster centres.
+
+3. IDENTITY CONFIDENCE update after clustering
+   After merging, the canonical identity's confidence is updated from the mean
+   match_score of its violation history.
+
+4. NOISE POINT handling
+   Noise points are left assigned to their current identity.
+   Unassigned noise points get a new solo identity (unchanged from v1).
 """
+
 import logging
-import os
-import queue
-import threading
-import time
-import uuid
-from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Optional
 
 import numpy as np
+from sklearn.cluster import DBSCAN
+from sklearn.metrics.pairwise import cosine_distances
+
+from extensions import db
+from face.models import FaceEmbedding, FaceIdentity, Violation
 
 logger = logging.getLogger(__name__)
 
-
-@dataclass
-class ViolationJob:
-    stream_id:       str
-    violation_type:  str
-    confidence:      float
-    person_crop_bgr: np.ndarray
-    person_bbox:     list[float]
+QUALITY_ANCHOR_MIN = 0.55   # embeddings below this are soft-included (distance inflated)
+QUALITY_INFLATE    = 1.25   # inflate distances for low-quality embeddings by this factor
 
 
-class TaskQueue:
-    def __init__(self, num_workers: int = 2, maxsize: int = 200):
-        self._q       = queue.Queue(maxsize=maxsize)
-        self._workers = []
-        self._stop    = threading.Event()
-        self._app     = None
-        self._n       = num_workers
+def run_clustering(
+    eps: float = 0.40,
+    min_samples: int = 2,
+    only_unconfirmed: bool = True,
+) -> dict:
+    """
+    Consolidate fragmented identities using quality-weighted DBSCAN.
 
-        # ── Identity-based deduplication (Layer 2) ────────────────────────────
-        # Key: (identity_id, violation_type)
-        # Value: monotonic timestamp of last logged violation
-        self._identity_cooldown: dict  = {}
-        self._identity_cd_lock         = threading.Lock()
-        self._identity_cooldown_s: int = 30   # overridden from config in init_app
+    Returns dict:
+        clusters_found, identities_merged, embeddings_reassigned, noise_count
+    """
+    # ── Load embeddings ───────────────────────────────────────────────────────
+    query = FaceEmbedding.query
 
-        # ── Auto-clustering counter ───────────────────────────────────────────
-        self._violations_since_cluster = 0
-        self._cluster_every_n          = 50   # overridden from config
-        self._cluster_lock             = threading.Lock()
+    if only_unconfirmed:
+        confirmed_ids = [
+            i.id for i in FaceIdentity.query.filter_by(is_confirmed=True, is_archived=False).all()
+        ]
+        if confirmed_ids:
+            query = query.filter(~FaceEmbedding.identity_id.in_(confirmed_ids))
 
-        # ── Dropped job counter (exposed on /health) ──────────────────────────
-        self._dropped = 0
-        self._dropped_lock = threading.Lock()
+    all_embs: list[FaceEmbedding] = query.all()
 
-    def init_app(self, app) -> None:
-        self._app                  = app
-        n                          = app.config.get("TASK_WORKER_THREADS", self._n)
-        maxsize                    = app.config.get("TASK_QUEUE_MAXSIZE",  200)
-        self._identity_cooldown_s  = app.config.get("IDENTITY_VIOLATION_COOLDOWN", 30)
-        self._cluster_every_n      = app.config.get("CLUSTER_EVERY_N_VIOLATIONS",  50)
-        self._q                    = queue.Queue(maxsize=maxsize)
+    if len(all_embs) < 2:
+        logger.info("Consolidation skipped — fewer than 2 eligible embeddings.")
+        return {"clusters_found": 0, "identities_merged": 0,
+                "embeddings_reassigned": 0, "noise_count": 0}
 
-        for i in range(n):
-            t = threading.Thread(
-                target=self._loop, name=f"task-worker-{i}", daemon=True
-            )
-            t.start()
-            self._workers.append(t)
+    # ── Build quality-weighted distance matrix ────────────────────────────────
+    X = np.stack([e.embedding for e in all_embs]).astype(np.float32)
+    D = cosine_distances(X).astype(np.float64)
+    np.clip(D, 0, 2, out=D)
 
-        logger.info("TaskQueue: %d workers, identity cooldown=%ds.", n, self._identity_cooldown_s)
+    # Inflate distances for low-quality embeddings in both directions
+    qualities = np.array([
+        e.quality_score if e.quality_score is not None else 0.5
+        for e in all_embs
+    ], dtype=np.float64)
 
-    def put(self, job: Any) -> bool:
-        try:
-            self._q.put_nowait(job)
-            return True
-        except queue.Full:
-            with self._dropped_lock:
-                self._dropped += 1
-            logger.warning("TaskQueue full — dropped job #%d.", self._dropped)
-            return False
+    low_q_mask = qualities < QUALITY_ANCHOR_MIN
+    if low_q_mask.any():
+        # Inflate rows AND columns for low-quality points
+        D[low_q_mask, :] *= QUALITY_INFLATE
+        D[:, low_q_mask] *= QUALITY_INFLATE
+        np.clip(D, 0, 2, out=D)
 
-    @property
-    def dropped_count(self) -> int:
-        with self._dropped_lock:
-            return self._dropped
+    # ── DBSCAN ───────────────────────────────────────────────────────────────
+    labels = DBSCAN(metric="precomputed", eps=eps, min_samples=min_samples)\
+             .fit_predict(D)
 
-    # ── Worker loop ───────────────────────────────────────────────────────────
-    def _loop(self) -> None:
-        while not self._stop.is_set():
-            try:
-                job = self._q.get(timeout=1.0)
-            except queue.Empty:
+    unique_labels       = set(labels)
+    clusters_found      = len(unique_labels - {-1})
+    identities_merged   = 0
+    embeddings_reassigned = 0
+
+    logger.info(
+        "DBSCAN: %d embeddings → %d clusters, %d noise",
+        len(all_embs), clusters_found, (labels == -1).sum(),
+    )
+
+    # ── Process clusters ──────────────────────────────────────────────────────
+    for cluster_id in unique_labels:
+        cluster_indices = np.where(labels == cluster_id)[0]
+        cluster_embs    = [all_embs[i] for i in cluster_indices]
+
+        if cluster_id == -1:
+            # Noise: ensure each has an identity
+            for emb in cluster_embs:
+                if emb.identity_id is None:
+                    label    = FaceIdentity.next_label()
+                    identity = FaceIdentity(label=label, is_confirmed=False)
+                    db.session.add(identity)
+                    db.session.flush()
+                    emb.identity_id = identity.id
+                    embeddings_reassigned += 1
+            continue
+
+        identity_ids = {e.identity_id for e in cluster_embs if e.identity_id is not None}
+
+        # Choose canonical: confirmed > oldest created_at
+        canonical: Optional[FaceIdentity] = None
+        for iid in identity_ids:
+            candidate = FaceIdentity.query.get(iid)
+            if candidate is None or candidate.is_archived:
                 continue
-            try:
-                with self._app.app_context():
-                    self._dispatch(job)
-            except Exception as exc:
-                logger.error("Worker error: %s", exc, exc_info=True)
-            finally:
-                self._q.task_done()
+            if canonical is None:
+                canonical = candidate
+            elif candidate.is_confirmed and not canonical.is_confirmed:
+                canonical = candidate
+            elif (not canonical.is_confirmed and not candidate.is_confirmed
+                  and candidate.created_at < canonical.created_at):
+                canonical = candidate
 
-    def _dispatch(self, job: Any) -> None:
-        if isinstance(job, ViolationJob):
-            self._handle_violation(job)
-        else:
-            logger.warning("Unknown job: %s", type(job))
+        if canonical is None:
+            label     = FaceIdentity.next_label()
+            canonical = FaceIdentity(label=label, is_confirmed=False)
+            db.session.add(canonical)
+            db.session.flush()
 
-    # ── Violation handler ─────────────────────────────────────────────────────
-    def _handle_violation(self, job: ViolationJob) -> None:
-        """
-        Pipeline:
-          1. Embed person crop via InsightFace
-          2. match_or_create() → identity_id, label, score
-          3. Identity-level deduplication (Layer 2)
-          4. Save image + write Violation row
-          5. Trigger auto-clustering if threshold reached
-        """
-        import cv2
-        from flask import current_app
-        from face.models import Violation
-        from extensions import db
+        # Re-assign embeddings
+        for emb in cluster_embs:
+            if emb.identity_id != canonical.id:
+                emb.identity_id = canonical.id
+                embeddings_reassigned += 1
 
-        pipeline      = current_app.extensions["face_pipeline"]
-        violation_dir = current_app.config["VIOLATIONS_IMAGE_DIR"]
-        os.makedirs(violation_dir, exist_ok=True)
+        # Merge non-canonical identities → ARCHIVE (not delete)
+        for iid in identity_ids:
+            if iid == canonical.id:
+                continue
+            old = FaceIdentity.query.get(iid)
+            if old is None or old.is_confirmed or old.is_archived:
+                continue
 
-        # ── 1. Embed ──────────────────────────────────────────────────────────
-        faces = pipeline.embed_crop(job.person_crop_bgr)
-        identity_id: Optional[str] = None
-        label  = "Unknown Person"
-        score  : Optional[float] = None
-
-        if faces:
-            best         = max(faces, key=lambda f: f["det_score"])
-            identity_id, label, score = pipeline.match_or_create(
-                best["embedding"], stream_id=job.stream_id
+            # Move violations and inherit thumbnail if needed
+            Violation.query.filter_by(identity_id=iid).update(
+                {"identity_id": canonical.id}
             )
+            if old.thumbnail_filename and not canonical.thumbnail_filename:
+                canonical.thumbnail_filename = old.thumbnail_filename
 
-        # ── 2. Identity-level deduplication (Layer 2) ─────────────────────────
-        # Key is (identity_id, violation_type). Unknown faces use stream+type key.
-        dedup_key = (identity_id or job.stream_id, job.violation_type)
-        now       = time.monotonic()
+            # ARCHIVE the source — never hard delete
+            old.is_archived    = True
+            old.merged_into_id = canonical.id
+            identities_merged += 1
 
-        with self._identity_cd_lock:
-            last = self._identity_cooldown.get(dedup_key, 0.0)
-            if now - last < self._identity_cooldown_s:
-                logger.debug(
-                    "Deduped: identity=%s type=%s (%.1fs ago)",
-                    label, job.violation_type, now - last,
-                )
-                return   # discard — no image saved, no DB row
-            self._identity_cooldown[dedup_key] = now
+        # Update canonical's identity_confidence from its violation history
+        violation_scores = [
+            v.match_score for v in canonical.violations.all()
+            if v.match_score is not None
+        ]
+        if violation_scores:
+            canonical.identity_confidence = float(np.mean(violation_scores))
 
-        # ── 3. Save image ─────────────────────────────────────────────────────
-        image_filename = f"{uuid.uuid4().hex}.jpg"
-        cv2.imwrite(os.path.join(violation_dir, image_filename), job.person_crop_bgr)
+    db.session.commit()
+    noise_count = int((labels == -1).sum())
+    logger.info(
+        "Consolidation done: %d merged, %d reassigned, %d noise.",
+        identities_merged, embeddings_reassigned, noise_count,
+    )
 
-        # ── 4. Write violation ────────────────────────────────────────────────
-        violation = Violation(
-            stream_id=job.stream_id,
-            violation_type=job.violation_type,
-            confidence=job.confidence,
-            identity_id=identity_id,
-            match_score=score,
-            image_filename=image_filename,
-        )
-        db.session.add(violation)
-        db.session.commit()
-
-        logger.info("Violation: %s → %s (score=%s)",
-                    job.violation_type, label,
-                    f"{score:.4f}" if score else "none")
-
-        # ── 5. Auto-clustering ────────────────────────────────────────────────
-        self._maybe_cluster(current_app._get_current_object())
-
-    def _maybe_cluster(self, app) -> None:
-        """Trigger DBSCAN clustering every N violations."""
-        with self._cluster_lock:
-            self._violations_since_cluster += 1
-            if self._violations_since_cluster < self._cluster_every_n:
-                return
-            self._violations_since_cluster = 0
-
-        logger.info("Auto-clustering triggered (every %d violations).", self._cluster_every_n)
-        try:
-            from face.clustering import run_clustering
-            result = run_clustering(
-                eps=app.config["CLUSTER_EPS"],
-                min_samples=app.config["CLUSTER_MIN_SAMPLES"],
-            )
-            if result["identities_merged"] > 0:
-                # Only do the expensive full reload when clustering actually merged something
-                with app.app_context():
-                    app.extensions["face_pipeline"].reload_cache()
-                logger.info("Post-cluster cache rebuilt: %s", result)
-        except Exception as exc:
-            logger.error("Auto-clustering failed: %s", exc, exc_info=True)
-
-    def shutdown(self, timeout: float = 5.0) -> None:
-        self._stop.set()
-        for t in self._workers:
-            t.join(timeout=timeout)
-        logger.info("TaskQueue shut down.")
+    return {
+        "clusters_found":        clusters_found,
+        "identities_merged":     identities_merged,
+        "embeddings_reassigned": embeddings_reassigned,
+        "noise_count":           noise_count,
+    }

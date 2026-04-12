@@ -318,3 +318,63 @@ def merge_from_violations():
         "message":  f"Linked {len(violations)} violations to '{label}'.",
         "identity": identity.to_dict(),
     }), 200
+
+
+# ── Review queue ──────────────────────────────────────────────────────────────
+@face_bp.get("/review-queue")
+def review_queue():
+    """
+    Returns unconfirmed, non-archived identities sorted by:
+      1. violation_count DESC  (high-risk first)
+      2. last_seen DESC        (recent activity first)
+
+    Each item includes the identity summary + its two most recent violation
+    images so the operator can make a quick decision without opening a detail view.
+
+    Used by the Review Queue panel in the frontend.
+    """
+    from sqlalchemy import func
+
+    # Subquery: count violations per identity
+    vcount = (
+        db.session.query(
+            Violation.identity_id,
+            func.count(Violation.id).label("vcount"),
+        )
+        .group_by(Violation.identity_id)
+        .subquery()
+    )
+
+    identities = (
+        FaceIdentity.query
+        .filter_by(is_confirmed=False, is_archived=False)
+        .outerjoin(vcount, FaceIdentity.id == vcount.c.identity_id)
+        .order_by(
+            vcount.c.vcount.desc().nullslast(),
+            FaceIdentity.last_seen.desc().nullslast(),
+        )
+        .limit(100)
+        .all()
+    )
+
+    results = []
+    for identity in identities:
+        d = identity.to_summary()
+        d["violation_count"] = identity.violations.count()
+        d["embedding_count"] = identity.embeddings.count()
+
+        # Two most recent violation images for quick preview
+        recent_violations = (
+            identity.violations
+            .filter(Violation.image_filename.isnot(None))
+            .order_by(Violation.timestamp.desc())
+            .limit(2)
+            .all()
+        )
+        d["preview_images"] = [
+            f"/violations/image/{v.image_filename}"
+            for v in recent_violations
+        ]
+        results.append(d)
+
+    return jsonify(results), 200

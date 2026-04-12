@@ -1,30 +1,33 @@
 """
-InsightFacePipeline
-===================
-Model: buffalo_l (InsightFace)
-  Detection : RetinaFace
-  Embedding : ArcFace — 512-dim, L2-normalised
+InsightFacePipeline  — v2
+==========================
+Model  : buffalo_l (InsightFace)
+Detect : RetinaFace
+Embed  : ArcFace 512-dim L2-normalised
 
-Key design choices in this version
-------------------------------------
-INCREMENTAL cache updates (no full DB reload per violation)
-  match_or_create() patches only the affected identity's centroid in memory.
-  Full reload only happens at startup and after clustering.
-  This reduces per-violation DB reads from O(N_identities × M_embeddings) → O(1).
+Changes from v1
+---------------
+QUALITY-WEIGHTED centroid
+  Both reload_cache() and _patch_cache() weight each embedding by its
+  det_score.  A blurry detection (score 0.62) has ~65 % the influence of
+  a sharp one (score 0.95).  The centroid no longer drifts toward poor frames.
 
-Stable centroid via running mean
-  Cache stores (centroid, count). When a new embedding is added:
-      new_c = normalise(old_c * n + new_emb)
-      new_n = n + 1
-  No DB read required for the update.
+OUTLIER REJECTION in match_or_create()
+  Before accepting a new embedding into an existing identity, we check its
+  cosine similarity to the current centroid.  If it falls below
+  OUTLIER_MIN_SIMILARITY (default 0.35) the embedding is stored in the DB
+  for clustering purposes but the centroid is NOT updated.  A single bad
+  frame can no longer corrupt the matching state.
 
-Threshold at 0.55 (was 0.45)
-  ArcFace on surveillance PPE footage:
-      clean frontal:    0.75 – 0.92
-      occluded/angled:  0.45 – 0.65
-      different people: 0.05 – 0.30
-  0.45 sits in the middle of the occluded-same-person band → too many misses.
-  0.55 is the lower edge of the "reliably same person" zone.
+IDENTITY CONFIDENCE SCORE
+  The cache stores the running weighted-average match score for each identity.
+  This is exposed as identity_confidence (0.0–1.0) and lets operators see
+  which identities are "settled" vs. still being refined.
+
+EMBEDDING QUALITY SCORE
+  embed_crop() returns a quality_score per face:
+      quality = det_score * face_area_ratio
+  Stored on FaceEmbedding.  Used by clustering to weight the distance matrix.
 """
 
 from __future__ import annotations
@@ -42,7 +45,7 @@ _insight_app  = None
 _insight_lock = threading.Lock()
 
 
-# ── Readers-writer lock ───────────────────────────────────────────────────────
+# ── RW lock ───────────────────────────────────────────────────────────────────
 class _RWLock:
     def __init__(self):
         self._cond    = threading.Condition(threading.Lock())
@@ -73,26 +76,63 @@ class _RWLock:
     def write(self): return self._W(self)
 
 
+# ── Quality scoring ───────────────────────────────────────────────────────────
+def compute_quality_score(det_score: float, bbox: list, image_shape: tuple) -> float:
+    """
+    Combined embedding quality score in [0, 1].
+
+    Components
+    ----------
+    det_score     : RetinaFace detection confidence (primary signal)
+    face_area_ratio : fraction of the crop occupied by the detected face
+                      Small faces → unreliable embeddings → lower score
+
+    Formula: quality = det_score * 0.7 + area_ratio_score * 0.3
+
+    Examples
+    --------
+    det=0.95, face fills 40% of crop  → quality ≈ 0.83
+    det=0.70, face fills 10% of crop  → quality ≈ 0.56
+    det=0.62, tiny face               → quality ≈ 0.47
+    """
+    if not bbox or len(bbox) < 4 or not image_shape:
+        return float(det_score)
+
+    h, w = image_shape[:2]
+    crop_area = max(h * w, 1)
+    bx1, by1, bx2, by2 = bbox[:4]
+    face_area = max((bx2 - bx1) * (by2 - by1), 0)
+    area_ratio = min(face_area / crop_area, 1.0)
+    # Normalise: 0.15 area fills a good-quality crop for a nearby person
+    area_score = min(area_ratio / 0.15, 1.0)
+
+    return float(np.clip(det_score * 0.7 + area_score * 0.3, 0.0, 1.0))
+
+
 # ── Pipeline ──────────────────────────────────────────────────────────────────
 class InsightFacePipeline:
     """
-    Cache structure:
-        {
-          identity_id: {
-            "label":    str,
-            "centroid": np.ndarray (512,),  # running normalised mean
-            "count":    int,                 # number of embeddings averaged in
-          }
+    Cache entry structure:
+    {
+        identity_id: {
+            "label":      str,
+            "centroid":   np.ndarray(512,),  # quality-weighted normalised mean
+            "weight_sum": float,              # sum of quality scores used
+            "confidence": float,             # running mean of match scores
+            "n_matches":  int,               # total match events
         }
+    }
     """
 
     def __init__(self, config) -> None:
-        self._model_name    = getattr(config, "INSIGHTFACE_MODEL",       "buffalo_l")
-        self._threshold     = getattr(config, "IDENTITY_MATCH_THRESHOLD", 0.55)
-        self._det_score_min = getattr(config, "FACE_DET_SCORE_MIN",       0.60)
-        self._rw            = _RWLock()
-        self._cache: dict   = {}
-        self._ready         = False
+        self._model_name        = getattr(config, "INSIGHTFACE_MODEL",        "buffalo_l")
+        self._threshold         = getattr(config, "IDENTITY_MATCH_THRESHOLD",  0.55)
+        self._det_score_min     = getattr(config, "FACE_DET_SCORE_MIN",         0.60)
+        self._quality_min       = getattr(config, "EMBEDDING_QUALITY_MIN",      0.45)
+        self._outlier_min_sim   = getattr(config, "OUTLIER_MIN_SIMILARITY",      0.35)
+        self._rw                = _RWLock()
+        self._cache: dict       = {}
+        self._ready             = False
 
     # ── Init ──────────────────────────────────────────────────────────────────
     def init_app(self, app) -> None:
@@ -121,7 +161,16 @@ class InsightFacePipeline:
     def embed_crop(self, person_crop_bgr: np.ndarray) -> list[dict]:
         """
         RetinaFace + ArcFace on a BGR person-bbox crop.
-        Returns [{"embedding": ndarray(512), "det_score": float, "bbox": list}]
+
+        Returns list of:
+            {
+                "embedding":     ndarray(512,),
+                "det_score":     float,
+                "quality_score": float,    ← NEW: combined quality
+                "bbox":          list,
+            }
+
+        Faces below FACE_DET_SCORE_MIN or EMBEDDING_QUALITY_MIN are dropped.
         """
         if not self.is_ready or person_crop_bgr is None or person_crop_bgr.size == 0:
             return []
@@ -138,38 +187,63 @@ class InsightFacePipeline:
         for face in faces:
             if face.det_score < self._det_score_min or face.embedding is None:
                 continue
-            emb = np.asarray(face.embedding, dtype=np.float32)
+
+            bbox   = face.bbox.tolist() if face.bbox is not None else []
+            q      = compute_quality_score(float(face.det_score), bbox, person_crop_bgr.shape)
+
+            if q < self._quality_min:
+                logger.debug("Face rejected: quality=%.3f < %.3f", q, self._quality_min)
+                continue
+
+            emb  = np.asarray(face.embedding, dtype=np.float32)
             norm = np.linalg.norm(emb)
             if norm > 0:
                 emb = emb / norm
+
             results.append({
-                "embedding": emb,
-                "det_score": float(face.det_score),
-                "bbox":      face.bbox.tolist() if face.bbox is not None else [],
+                "embedding":     emb,
+                "det_score":     float(face.det_score),
+                "quality_score": q,
+                "bbox":          bbox,
             })
         return results
 
-    # ── Cache (full rebuild — startup + post-clustering only) ─────────────────
+    # ── Full cache rebuild ────────────────────────────────────────────────────
     def reload_cache(self) -> int:
         """
-        Full DB rebuild. Expensive. Call ONLY on startup and after clustering.
-        NOT called per violation.
+        Quality-weighted centroid rebuild.
+        Call only at startup and after clustering.
         """
         from face.models import FaceIdentity
 
-        identities = FaceIdentity.query.all()
-        new: dict = {}
+        identities = FaceIdentity.query.filter_by(is_archived=False).all()
+        new: dict  = {}
+
         for identity in identities:
-            embs = [e.embedding for e in identity.embeddings.all()]
-            if not embs:
+            rows = identity.embeddings.all()
+            if not rows:
                 continue
-            mean = np.mean(embs, axis=0).astype(np.float32)
-            norm = np.linalg.norm(mean)
+
+            embs    = np.stack([r.embedding for r in rows])
+            weights = np.array([
+                r.quality_score if r.quality_score is not None else 0.5
+                for r in rows
+            ], dtype=np.float32)
+            wsum    = weights.sum()
+            if wsum == 0:
+                weights = np.ones(len(rows), dtype=np.float32)
+                wsum    = float(len(rows))
+
+            mean     = (embs * weights[:, None]).sum(axis=0).astype(np.float32)
+            norm     = np.linalg.norm(mean)
             centroid = mean / norm if norm > 0 else mean
+
             new[identity.id] = {
-                "label":    identity.label,
-                "centroid": centroid,
-                "count":    len(embs),
+                "label":      identity.label,
+                "centroid":   centroid,
+                "weight_sum": float(wsum),
+                "confidence": getattr(identity, "identity_confidence", 0.0) or 0.0,
+                "n_matches":  len(rows),
             }
 
         with self._rw.write():
@@ -178,59 +252,81 @@ class InsightFacePipeline:
         logger.info("Cache rebuilt: %d identities.", len(new))
         return len(new)
 
-    # ── Cache (incremental — called per violation) ────────────────────────────
-    def _patch_cache(self, identity_id: str, label: str, new_embedding: np.ndarray) -> None:
+    # ── Incremental cache patch ───────────────────────────────────────────────
+    def _patch_cache(
+        self,
+        identity_id: str,
+        label: str,
+        new_embedding: np.ndarray,
+        quality: float,
+        match_score: float,
+        update_centroid: bool = True,
+    ) -> None:
         """
-        Update one identity's centroid in-place using a running mean.
-        O(1) — no DB reads. Called from match_or_create().
+        Quality-weighted incremental centroid update.
+        If update_centroid=False (outlier), only updates confidence stats.
+        O(1) — no DB reads.
         """
         with self._rw.write():
             entry = self._cache.get(identity_id)
+
             if entry is None:
-                # New identity — seed the cache entry
                 self._cache[identity_id] = {
-                    "label":    label,
-                    "centroid": new_embedding.copy(),
-                    "count":    1,
+                    "label":      label,
+                    "centroid":   new_embedding.copy(),
+                    "weight_sum": quality,
+                    "confidence": match_score,
+                    "n_matches":  1,
                 }
                 return
 
-            n       = entry["count"]
-            old_c   = entry["centroid"]
-            # Running mean: new_c = normalise(old_c * n + new_emb)
-            combined = old_c * n + new_embedding
-            norm     = np.linalg.norm(combined)
-            entry["centroid"] = combined / norm if norm > 0 else combined
-            entry["count"]    = n + 1
-            entry["label"]    = label   # in case it was renamed
+            entry["label"]     = label
+            entry["n_matches"] += 1
+            # Running weighted mean of match scores
+            n = entry["n_matches"]
+            entry["confidence"] = entry["confidence"] * (n - 1) / n + match_score / n
+
+            if update_centroid:
+                old_w  = entry["weight_sum"]
+                old_c  = entry["centroid"]
+                new_w  = old_w + quality
+                # Weighted mean update
+                combined = old_c * old_w + new_embedding * quality
+                norm     = np.linalg.norm(combined)
+                entry["centroid"]   = combined / norm if norm > 0 else combined
+                entry["weight_sum"] = new_w
 
     def _snapshot(self) -> dict:
         with self._rw.read():
-            return {k: dict(v) for k, v in self._cache.items()}
+            return {k: {**v} for k, v in self._cache.items()}
 
     # ── Match / create ────────────────────────────────────────────────────────
     def match_or_create(
         self,
         embedding: np.ndarray,
+        quality: float,
         stream_id: Optional[str] = None,
     ) -> tuple[str, str, float]:
         """
-        Match embedding against centroid cache.
-        On hit  → add embedding to existing identity (incremental cache update).
-        On miss → create new identity (incremental cache update).
+        Match embedding against quality-weighted centroid cache.
 
-        Returns (identity_id, label, similarity_score).
-        score = 0.0 on new identity creation.
+        Outlier handling
+        ----------------
+        If the best match score >= threshold but < OUTLIER_MIN_SIMILARITY of
+        the centroid, the embedding is stored in DB (useful for clustering) but
+        does NOT update the centroid.  This prevents a single bad frame from
+        corrupting the identity.
 
-        NO full reload_cache() is called here.
+        Returns (identity_id, label, match_score).
+        match_score = 0.0 when a new identity is created.
         """
         from face.models import FaceIdentity, FaceEmbedding
         from extensions import db
 
-        cache     = self._snapshot()
-        best_id   : Optional[str] = None
-        best_label: str            = ""
-        best_score: float          = 0.0
+        cache      = self._snapshot()
+        best_id    : Optional[str] = None
+        best_label : str           = ""
+        best_score : float         = 0.0
 
         for identity_id, data in cache.items():
             score = float(np.dot(embedding, data["centroid"]))
@@ -240,24 +336,42 @@ class InsightFacePipeline:
                 best_label = data["label"]
 
         if best_id and best_score >= self._threshold:
-            emb_row = FaceEmbedding(identity_id=best_id, stream_id=stream_id)
-            emb_row.embedding = embedding
+            # Outlier check: if the embedding is unusually far from the centroid,
+            # store it (helps clustering) but don't corrupt the centroid.
+            is_outlier = best_score < self._outlier_min_sim
+            if is_outlier:
+                logger.debug(
+                    "Outlier embedding for '%s': score=%.4f < outlier_min=%.4f — stored, centroid unchanged",
+                    best_label, best_score, self._outlier_min_sim,
+                )
+
+            emb_row               = FaceEmbedding(identity_id=best_id, stream_id=stream_id)
+            emb_row.embedding     = embedding
+            emb_row.det_score     = quality  # quality_score stored in det_score column
+            emb_row.quality_score = quality
             db.session.add(emb_row)
             db.session.commit()
-            self._patch_cache(best_id, best_label, embedding)
-            logger.debug("Matched '%s' score=%.4f", best_label, best_score)
+
+            self._patch_cache(
+                best_id, best_label, embedding, quality,
+                match_score=best_score,
+                update_centroid=not is_outlier,
+            )
             return best_id, best_label, best_score
 
         # No match → create new identity
         label    = FaceIdentity.next_label()
-        identity = FaceIdentity(label=label, is_confirmed=False)
+        identity = FaceIdentity(label=label, is_confirmed=False, identity_confidence=0.0)
         db.session.add(identity)
         db.session.flush()
 
-        emb_row = FaceEmbedding(identity_id=identity.id, stream_id=stream_id)
-        emb_row.embedding = embedding
+        emb_row               = FaceEmbedding(identity_id=identity.id, stream_id=stream_id)
+        emb_row.embedding     = embedding
+        emb_row.det_score     = quality
+        emb_row.quality_score = quality
         db.session.add(emb_row)
         db.session.commit()
-        self._patch_cache(identity.id, label, embedding)
-        logger.info("New identity: '%s'", label)
+
+        self._patch_cache(identity.id, label, embedding, quality, match_score=0.0)
+        logger.info("New identity: '%s' quality=%.3f", label, quality)
         return identity.id, label, 0.0

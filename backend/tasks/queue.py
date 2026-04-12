@@ -1,11 +1,5 @@
 """
-TaskQueue
-=========
-Async worker pool with two-layer violation deduplication.
-
-Layer 1 (worker.py, position-based): fast, prevents queue flooding.
-Layer 2 (here, identity-based): authoritative, prevents DB duplicates
-  after face recognition resolves the identity.
+TaskQueue — async violation pipeline
 """
 import logging
 import os
@@ -22,8 +16,7 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 
-def _now():
-    return datetime.now(timezone.utc)
+def _now(): return datetime.now(timezone.utc)
 
 
 @dataclass
@@ -43,38 +36,31 @@ class TaskQueue:
         self._app     = None
         self._n       = num_workers
 
-        # ── Identity-based deduplication (Layer 2) ────────────────────────────
-        # Key: (identity_id, violation_type)
-        # Value: monotonic timestamp of last logged violation
         self._identity_cooldown: dict  = {}
         self._identity_cd_lock         = threading.Lock()
-        self._identity_cooldown_s: int = 30   # overridden from config in init_app
+        self._identity_cooldown_s: int = 30
 
-        # ── Auto-clustering counter ───────────────────────────────────────────
         self._violations_since_cluster = 0
-        self._cluster_every_n          = 50   # overridden from config
+        self._cluster_every_n          = 50
         self._cluster_lock             = threading.Lock()
 
-        # ── Dropped job counter (exposed on /health) ──────────────────────────
-        self._dropped = 0
+        self._dropped      = 0
         self._dropped_lock = threading.Lock()
 
     def init_app(self, app) -> None:
-        self._app                  = app
-        n                          = app.config.get("TASK_WORKER_THREADS", self._n)
-        maxsize                    = app.config.get("TASK_QUEUE_MAXSIZE",  200)
-        self._identity_cooldown_s  = app.config.get("IDENTITY_VIOLATION_COOLDOWN", 30)
-        self._cluster_every_n      = app.config.get("CLUSTER_EVERY_N_VIOLATIONS",  50)
-        self._q                    = queue.Queue(maxsize=maxsize)
+        self._app                 = app
+        n                         = app.config.get("TASK_WORKER_THREADS", self._n)
+        maxsize                   = app.config.get("TASK_QUEUE_MAXSIZE",  200)
+        self._identity_cooldown_s = app.config.get("IDENTITY_VIOLATION_COOLDOWN", 30)
+        self._cluster_every_n     = app.config.get("CLUSTER_EVERY_N_VIOLATIONS",  50)
+        self._q                   = queue.Queue(maxsize=maxsize)
 
         for i in range(n):
-            t = threading.Thread(
-                target=self._loop, name=f"task-worker-{i}", daemon=True
-            )
+            t = threading.Thread(target=self._loop, name=f"task-worker-{i}", daemon=True)
             t.start()
             self._workers.append(t)
 
-        logger.info("TaskQueue: %d workers, identity cooldown=%ds.", n, self._identity_cooldown_s)
+        logger.info("TaskQueue: %d workers.", n)
 
     def put(self, job: Any) -> bool:
         try:
@@ -83,7 +69,7 @@ class TaskQueue:
         except queue.Full:
             with self._dropped_lock:
                 self._dropped += 1
-            logger.warning("TaskQueue full — dropped job #%d.", self._dropped)
+            logger.warning("Queue full — dropped job #%d.", self._dropped)
             return False
 
     @property
@@ -91,7 +77,6 @@ class TaskQueue:
         with self._dropped_lock:
             return self._dropped
 
-    # ── Worker loop ───────────────────────────────────────────────────────────
     def _loop(self) -> None:
         while not self._stop.is_set():
             try:
@@ -112,19 +97,19 @@ class TaskQueue:
         else:
             logger.warning("Unknown job: %s", type(job))
 
-    # ── Violation handler ─────────────────────────────────────────────────────
     def _handle_violation(self, job: ViolationJob) -> None:
         """
         Pipeline:
-          1. Embed person crop via InsightFace
-          2. match_or_create() → identity_id, label, score
-          3. Identity-level deduplication (Layer 2)
-          4. Save image + write Violation row
-          5. Trigger auto-clustering if threshold reached
+          1. embed_crop() — quality-gated InsightFace
+          2. match_or_create() with quality score — outlier-safe
+          3. Identity-level dedup (Layer 2)
+          4. Save image + write Violation
+          5. Update identity metadata (last_seen, thumbnail, confidence)
+          6. Auto-cluster trigger
         """
         import cv2
         from flask import current_app
-        from face.models import Violation
+        from face.models import Violation, FaceIdentity
         from extensions import db
 
         pipeline      = current_app.extensions["face_pipeline"]
@@ -132,38 +117,36 @@ class TaskQueue:
         os.makedirs(violation_dir, exist_ok=True)
 
         # ── 1. Embed ──────────────────────────────────────────────────────────
-        faces = pipeline.embed_crop(job.person_crop_bgr)
-        identity_id: Optional[str] = None
-        label  = "Unknown Person"
-        score  : Optional[float] = None
+        faces       = pipeline.embed_crop(job.person_crop_bgr)
+        identity_id : Optional[str]   = None
+        label                         = "Unknown Person"
+        score       : Optional[float] = None
+        quality     : float           = 0.0
 
         if faces:
-            best         = max(faces, key=lambda f: f["det_score"])
+            best    = max(faces, key=lambda f: f["quality_score"])
+            quality = best["quality_score"]
+            # Pass quality into match_or_create so centroid weighting is correct
             identity_id, label, score = pipeline.match_or_create(
-                best["embedding"], stream_id=job.stream_id
+                best["embedding"], quality=quality, stream_id=job.stream_id
             )
 
-        # ── 2. Identity-level deduplication (Layer 2) ─────────────────────────
-        # Key is (identity_id, violation_type). Unknown faces use stream+type key.
+        # ── 2. Identity-level dedup ───────────────────────────────────────────
         dedup_key = (identity_id or job.stream_id, job.violation_type)
         now       = time.monotonic()
 
         with self._identity_cd_lock:
             last = self._identity_cooldown.get(dedup_key, 0.0)
             if now - last < self._identity_cooldown_s:
-                logger.debug(
-                    "Deduped: identity=%s type=%s (%.1fs ago)",
-                    label, job.violation_type, now - last,
-                )
-                return   # discard — no image saved, no DB row
+                logger.debug("Deduped: %s / %s (%.1fs ago)", label, job.violation_type, now - last)
+                return
             self._identity_cooldown[dedup_key] = now
 
         # ── 3. Save image ─────────────────────────────────────────────────────
         image_filename = f"{uuid.uuid4().hex}.jpg"
         cv2.imwrite(os.path.join(violation_dir, image_filename), job.person_crop_bgr)
 
-        # ── 4. Write violation + update identity metadata ─────────────────────
-        now_ts = datetime.utcnow().replace(tzinfo=None)   # naive UTC for SQLite compat
+        # ── 4. Write violation ────────────────────────────────────────────────
         violation = Violation(
             stream_id=job.stream_id,
             violation_type=job.violation_type,
@@ -174,33 +157,41 @@ class TaskQueue:
         )
         db.session.add(violation)
 
-        # Update identity's last_seen and thumbnail (if not already set)
+        # ── 5. Update identity metadata ───────────────────────────────────────
         if identity_id:
-            from face.models import FaceIdentity
             identity_row = FaceIdentity.query.get(identity_id)
             if identity_row:
                 identity_row.last_seen = _now()
+
+                # Set thumbnail only once (first good violation image)
                 if not identity_row.thumbnail_filename:
                     identity_row.thumbnail_filename = image_filename
 
+                # Update stored identity_confidence from running cache value
+                cache_entry = pipeline._cache.get(identity_id)
+                if cache_entry:
+                    identity_row.identity_confidence = cache_entry.get("confidence", 0.0)
+
         db.session.commit()
 
-        logger.info("Violation: %s → %s (score=%s)",
-                    job.violation_type, label,
-                    f"{score:.4f}" if score else "none")
+        logger.info(
+            "Violation: %s → %s (score=%s quality=%.3f)",
+            job.violation_type, label,
+            f"{score:.4f}" if score else "none",
+            quality,
+        )
 
-        # ── 5. Auto-clustering ────────────────────────────────────────────────
+        # ── 6. Auto-cluster ───────────────────────────────────────────────────
         self._maybe_cluster(current_app._get_current_object())
 
     def _maybe_cluster(self, app) -> None:
-        """Trigger DBSCAN clustering every N violations."""
         with self._cluster_lock:
             self._violations_since_cluster += 1
             if self._violations_since_cluster < self._cluster_every_n:
                 return
             self._violations_since_cluster = 0
 
-        logger.info("Auto-clustering triggered (every %d violations).", self._cluster_every_n)
+        logger.info("Auto-consolidation triggered.")
         try:
             from face.clustering import run_clustering
             result = run_clustering(
@@ -208,12 +199,11 @@ class TaskQueue:
                 min_samples=app.config["CLUSTER_MIN_SAMPLES"],
             )
             if result["identities_merged"] > 0:
-                # Only do the expensive full reload when clustering actually merged something
                 with app.app_context():
                     app.extensions["face_pipeline"].reload_cache()
                 logger.info("Post-cluster cache rebuilt: %s", result)
         except Exception as exc:
-            logger.error("Auto-clustering failed: %s", exc, exc_info=True)
+            logger.error("Auto-consolidation failed: %s", exc, exc_info=True)
 
     def shutdown(self, timeout: float = 5.0) -> None:
         self._stop.set()
