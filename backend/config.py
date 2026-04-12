@@ -44,6 +44,23 @@ class Config:
     # 0.55 is the reliable lower bound for ArcFace same-person on occluded surveillance footage
     # 0.45 (old default) was too low — caused identity fragmentation
     IDENTITY_MATCH_THRESHOLD: float = float(os.environ.get("IDENTITY_MATCH_THRESHOLD", "0.55"))
+    # Minimum combined quality score to accept an embedding (det_score × area_ratio)
+    EMBEDDING_QUALITY_MIN: float = float(os.environ.get("EMBEDDING_QUALITY_MIN", "0.45"))
+
+    # ── Multi-prototype identity model ────────────────────────────────────────
+    # Max prototypes kept per identity in the live cache (K in K-prototype model)
+    MAX_PROTOTYPES: int = int(os.environ.get("MAX_PROTOTYPES", "5"))
+    # Cosine similarity above which a new embedding merges into an existing prototype
+    # rather than creating a new one (same pose / lighting condition)
+    PROTO_MERGE_THRESHOLD: float = float(os.environ.get("PROTO_MERGE_THRESHOLD", "0.80"))
+
+    # ── Merge suggestion engine ───────────────────────────────────────────────
+    # Minimum cross-identity similarity to surface as a merge suggestion
+    SUGGESTION_THRESHOLD: float = float(os.environ.get("SUGGESTION_THRESHOLD", "0.68"))
+    # Maximum suggestions returned per call
+    SUGGESTION_MAX_RESULTS: int = int(os.environ.get("SUGGESTION_MAX_RESULTS", "30"))
+    # Minimum cosine similarity to update centroid (below this = outlier, stored but ignored)
+    OUTLIER_MIN_SIMILARITY: float = float(os.environ.get("OUTLIER_MIN_SIMILARITY", "0.35"))
     FACE_DET_SCORE_MIN: float = float(os.environ.get("FACE_DET_SCORE_MIN", "0.6"))
 
     # ── Clustering ────────────────────────────────────────────────────────────
