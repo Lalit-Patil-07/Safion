@@ -1,33 +1,37 @@
 """
-InsightFacePipeline  — v2
-==========================
+InsightFacePipeline  — v3  (multi-prototype)
+=============================================
 Model  : buffalo_l (InsightFace)
 Detect : RetinaFace
 Embed  : ArcFace 512-dim L2-normalised
 
-Changes from v1
----------------
-QUALITY-WEIGHTED centroid
-  Both reload_cache() and _patch_cache() weight each embedding by its
-  det_score.  A blurry detection (score 0.62) has ~65 % the influence of
-  a sharp one (score 0.95).  The centroid no longer drifts toward poor frames.
+Changes from v2 (single centroid)
+-----------------------------------
+MULTI-PROTOTYPE CACHE
+  Each identity now stores up to MAX_PROTOTYPES representative vectors instead
+  of a single weighted centroid.  Prototypes capture distinct appearance modes
+  (frontal / profile, with helmet / without, day / night lighting).
 
-OUTLIER REJECTION in match_or_create()
-  Before accepting a new embedding into an existing identity, we check its
-  cosine similarity to the current centroid.  If it falls below
-  OUTLIER_MIN_SIMILARITY (default 0.35) the embedding is stored in the DB
-  for clustering purposes but the centroid is NOT updated.  A single bad
-  frame can no longer corrupt the matching state.
+  Prototype update rules (incremental, O(K) per violation):
+    1. Compute similarity to every existing prototype.
+    2. If best_sim >= PROTO_MERGE_THRESHOLD (same viewing condition):
+         weighted-average-merge into that prototype.
+    3. Else if len(prototypes) < MAX_PROTOTYPES:
+         add as a new prototype.
+    4. Else (at capacity, genuinely novel view):
+         replace the weakest prototype only if new quality is higher.
 
-IDENTITY CONFIDENCE SCORE
-  The cache stores the running weighted-average match score for each identity.
-  This is exposed as identity_confidence (0.0–1.0) and lets operators see
-  which identities are "settled" vs. still being refined.
+  reload_cache() rebuilds prototypes from stored embeddings using the same
+  greedy algorithm, seeded from highest-quality embeddings first.
 
-EMBEDDING QUALITY SCORE
-  embed_crop() returns a quality_score per face:
-      quality = det_score * face_area_ratio
-  Stored on FaceEmbedding.  Used by clustering to weight the distance matrix.
+MATCHING
+  match_or_create() scores each identity by the MAX similarity across all its
+  prototypes.  One strong match against any prototype is sufficient.
+  Outlier check and centroid-update guard are preserved.
+
+SIMILARITY ENGINE SUPPORT
+  _snapshot() now includes "is_confirmed" and "is_archived" flags so the
+  similarity engine (face/similarity.py) can filter without a DB round-trip.
 """
 
 from __future__ import annotations
@@ -76,63 +80,154 @@ class _RWLock:
     def write(self): return self._W(self)
 
 
-# ── Quality scoring ───────────────────────────────────────────────────────────
+# ── Quality scoring (unchanged from v2) ──────────────────────────────────────
 def compute_quality_score(det_score: float, bbox: list, image_shape: tuple) -> float:
     """
-    Combined embedding quality score in [0, 1].
-
-    Components
-    ----------
-    det_score     : RetinaFace detection confidence (primary signal)
-    face_area_ratio : fraction of the crop occupied by the detected face
-                      Small faces → unreliable embeddings → lower score
-
-    Formula: quality = det_score * 0.7 + area_ratio_score * 0.3
-
-    Examples
-    --------
-    det=0.95, face fills 40% of crop  → quality ≈ 0.83
-    det=0.70, face fills 10% of crop  → quality ≈ 0.56
-    det=0.62, tiny face               → quality ≈ 0.47
+    Combined embedding quality: det_score × 0.7 + face_area_ratio × 0.3
+    Range [0, 1].
     """
     if not bbox or len(bbox) < 4 or not image_shape:
         return float(det_score)
 
     h, w = image_shape[:2]
-    crop_area = max(h * w, 1)
     bx1, by1, bx2, by2 = bbox[:4]
-    face_area = max((bx2 - bx1) * (by2 - by1), 0)
-    area_ratio = min(face_area / crop_area, 1.0)
-    # Normalise: 0.15 area fills a good-quality crop for a nearby person
+    face_area  = max((bx2 - bx1) * (by2 - by1), 0)
+    area_ratio = min(face_area / max(h * w, 1), 1.0)
     area_score = min(area_ratio / 0.15, 1.0)
-
     return float(np.clip(det_score * 0.7 + area_score * 0.3, 0.0, 1.0))
+
+
+# ── Prototype helpers ─────────────────────────────────────────────────────────
+def _build_prototypes(
+    rows,
+    max_k: int,
+    merge_threshold: float,
+) -> list[dict]:
+    """
+    Build up to max_k representative prototypes from FaceEmbedding rows.
+
+    Algorithm
+    ---------
+    1. Sort rows by quality_score descending.
+    2. For each embedding, check similarity against current prototypes.
+       - If any prototype is within merge_threshold: weighted-merge.
+       - Else if under capacity: add new prototype.
+       - Else: skip (at capacity, this embedding doesn't add a new view).
+
+    Returns list of {"vec": ndarray(512), "weight": float, "count": int}.
+    """
+    rows_sorted = sorted(rows, key=lambda r: r.quality_score or 0.0, reverse=True)
+    prototypes: list[dict] = []
+
+    for row in rows_sorted:
+        emb = row.embedding
+        q   = float(row.quality_score or 0.5)
+
+        if not prototypes:
+            prototypes.append({"vec": emb, "weight": q, "count": 1})
+            continue
+
+        vecs     = np.stack([p["vec"] for p in prototypes])
+        sims     = (vecs @ emb).ravel()
+        best_idx = int(np.argmax(sims))
+        best_sim = float(sims[best_idx])
+
+        if best_sim >= merge_threshold:
+            p     = prototypes[best_idx]
+            w_old = p["weight"] * p["count"]
+            w_new = q
+            combined = p["vec"] * w_old + emb * w_new
+            norm     = np.linalg.norm(combined)
+            p["vec"]    = combined / norm if norm > 0 else combined
+            p["count"] += 1
+            p["weight"]  = (w_old + w_new) / p["count"]
+        elif len(prototypes) < max_k:
+            prototypes.append({"vec": emb, "weight": q, "count": 1})
+        # else: at capacity and genuinely different — skip
+
+    return prototypes
+
+
+def _proto_max_similarity(
+    prototypes: list[dict],
+    query: np.ndarray,
+) -> float:
+    """
+    Return the maximum cosine similarity between query and any prototype.
+    """
+    if not prototypes:
+        return 0.0
+    vecs = np.stack([p["vec"] for p in prototypes])
+    return float(np.max(vecs @ query))
+
+
+def _update_prototypes(
+    prototypes: list[dict],
+    new_emb: np.ndarray,
+    quality: float,
+    max_k: int,
+    merge_threshold: float,
+) -> None:
+    """
+    In-place incremental prototype update.  Called from _patch_cache().
+    """
+    if not prototypes:
+        prototypes.append({"vec": new_emb.copy(), "weight": quality, "count": 1})
+        return
+
+    vecs     = np.stack([p["vec"] for p in prototypes])
+    sims     = (vecs @ new_emb).ravel()
+    best_idx = int(np.argmax(sims))
+    best_sim = float(sims[best_idx])
+
+    if best_sim >= merge_threshold:
+        p     = prototypes[best_idx]
+        w_old = p["weight"] * p["count"]
+        w_new = quality
+        combined = p["vec"] * w_old + new_emb * w_new
+        norm     = np.linalg.norm(combined)
+        p["vec"]    = combined / norm if norm > 0 else combined
+        p["count"] += 1
+        p["weight"]  = (w_old + w_new) / p["count"]
+
+    elif len(prototypes) < max_k:
+        prototypes.append({"vec": new_emb.copy(), "weight": quality, "count": 1})
+
+    else:
+        # At capacity — replace weakest prototype if incoming quality is higher
+        weights  = [p["weight"] for p in prototypes]
+        min_idx  = int(np.argmin(weights))
+        if quality > prototypes[min_idx]["weight"]:
+            prototypes[min_idx] = {"vec": new_emb.copy(), "weight": quality, "count": 1}
 
 
 # ── Pipeline ──────────────────────────────────────────────────────────────────
 class InsightFacePipeline:
     """
-    Cache entry structure:
+    Cache entry structure (v3):
     {
         identity_id: {
-            "label":      str,
-            "centroid":   np.ndarray(512,),  # quality-weighted normalised mean
-            "weight_sum": float,              # sum of quality scores used
-            "confidence": float,             # running mean of match scores
-            "n_matches":  int,               # total match events
+            "label":        str,
+            "prototypes":   [{"vec": ndarray(512), "weight": float, "count": int}, ...],
+            "confidence":   float,   # running mean of match scores
+            "n_matches":    int,
+            "is_confirmed": bool,    # for similarity engine — no DB round-trip needed
+            "is_archived":  bool,
         }
     }
     """
 
     def __init__(self, config) -> None:
-        self._model_name        = getattr(config, "INSIGHTFACE_MODEL",        "buffalo_l")
-        self._threshold         = getattr(config, "IDENTITY_MATCH_THRESHOLD",  0.55)
-        self._det_score_min     = getattr(config, "FACE_DET_SCORE_MIN",         0.60)
-        self._quality_min       = getattr(config, "EMBEDDING_QUALITY_MIN",      0.45)
-        self._outlier_min_sim   = getattr(config, "OUTLIER_MIN_SIMILARITY",      0.35)
-        self._rw                = _RWLock()
-        self._cache: dict       = {}
-        self._ready             = False
+        self._model_name      = getattr(config, "INSIGHTFACE_MODEL",        "buffalo_l")
+        self._threshold       = getattr(config, "IDENTITY_MATCH_THRESHOLD",  0.55)
+        self._det_score_min   = getattr(config, "FACE_DET_SCORE_MIN",         0.60)
+        self._quality_min     = getattr(config, "EMBEDDING_QUALITY_MIN",      0.45)
+        self._outlier_min_sim = getattr(config, "OUTLIER_MIN_SIMILARITY",      0.35)
+        self._max_prototypes  = getattr(config, "MAX_PROTOTYPES",              5)
+        self._proto_merge     = getattr(config, "PROTO_MERGE_THRESHOLD",       0.80)
+        self._rw              = _RWLock()
+        self._cache: dict     = {}
+        self._ready           = False
 
     # ── Init ──────────────────────────────────────────────────────────────────
     def init_app(self, app) -> None:
@@ -161,16 +256,8 @@ class InsightFacePipeline:
     def embed_crop(self, person_crop_bgr: np.ndarray) -> list[dict]:
         """
         RetinaFace + ArcFace on a BGR person-bbox crop.
-
-        Returns list of:
-            {
-                "embedding":     ndarray(512,),
-                "det_score":     float,
-                "quality_score": float,    ← NEW: combined quality
-                "bbox":          list,
-            }
-
-        Faces below FACE_DET_SCORE_MIN or EMBEDDING_QUALITY_MIN are dropped.
+        Returns [{"embedding", "det_score", "quality_score", "bbox"}].
+        Faces below quality_min are dropped.
         """
         if not self.is_ready or person_crop_bgr is None or person_crop_bgr.size == 0:
             return []
@@ -187,19 +274,14 @@ class InsightFacePipeline:
         for face in faces:
             if face.det_score < self._det_score_min or face.embedding is None:
                 continue
-
-            bbox   = face.bbox.tolist() if face.bbox is not None else []
-            q      = compute_quality_score(float(face.det_score), bbox, person_crop_bgr.shape)
-
+            bbox = face.bbox.tolist() if face.bbox is not None else []
+            q    = compute_quality_score(float(face.det_score), bbox, person_crop_bgr.shape)
             if q < self._quality_min:
-                logger.debug("Face rejected: quality=%.3f < %.3f", q, self._quality_min)
                 continue
-
             emb  = np.asarray(face.embedding, dtype=np.float32)
             norm = np.linalg.norm(emb)
             if norm > 0:
                 emb = emb / norm
-
             results.append({
                 "embedding":     emb,
                 "det_score":     float(face.det_score),
@@ -211,8 +293,7 @@ class InsightFacePipeline:
     # ── Full cache rebuild ────────────────────────────────────────────────────
     def reload_cache(self) -> int:
         """
-        Quality-weighted centroid rebuild.
-        Call only at startup and after clustering.
+        Rebuild multi-prototype cache from DB.  Call at startup and post-clustering.
         """
         from face.models import FaceIdentity
 
@@ -223,27 +304,16 @@ class InsightFacePipeline:
             rows = identity.embeddings.all()
             if not rows:
                 continue
-
-            embs    = np.stack([r.embedding for r in rows])
-            weights = np.array([
-                r.quality_score if r.quality_score is not None else 0.5
-                for r in rows
-            ], dtype=np.float32)
-            wsum    = weights.sum()
-            if wsum == 0:
-                weights = np.ones(len(rows), dtype=np.float32)
-                wsum    = float(len(rows))
-
-            mean     = (embs * weights[:, None]).sum(axis=0).astype(np.float32)
-            norm     = np.linalg.norm(mean)
-            centroid = mean / norm if norm > 0 else mean
-
+            prototypes = _build_prototypes(rows, self._max_prototypes, self._proto_merge)
+            if not prototypes:
+                continue
             new[identity.id] = {
-                "label":      identity.label,
-                "centroid":   centroid,
-                "weight_sum": float(wsum),
-                "confidence": getattr(identity, "identity_confidence", 0.0) or 0.0,
-                "n_matches":  len(rows),
+                "label":        identity.label,
+                "prototypes":   prototypes,
+                "confidence":   identity.identity_confidence or 0.0,
+                "n_matches":    len(rows),
+                "is_confirmed": identity.is_confirmed,
+                "is_archived":  False,   # filtered above
             }
 
         with self._rw.write():
@@ -260,43 +330,43 @@ class InsightFacePipeline:
         new_embedding: np.ndarray,
         quality: float,
         match_score: float,
-        update_centroid: bool = True,
+        update_prototypes: bool = True,
+        is_confirmed: bool = False,
     ) -> None:
         """
-        Quality-weighted incremental centroid update.
-        If update_centroid=False (outlier), only updates confidence stats.
-        O(1) — no DB reads.
+        Incremental prototype update.  O(K) — no DB reads.
+        If update_prototypes=False (outlier), only confidence/n_matches are updated.
         """
         with self._rw.write():
             entry = self._cache.get(identity_id)
 
             if entry is None:
                 self._cache[identity_id] = {
-                    "label":      label,
-                    "centroid":   new_embedding.copy(),
-                    "weight_sum": quality,
-                    "confidence": match_score,
-                    "n_matches":  1,
+                    "label":        label,
+                    "prototypes":   [{"vec": new_embedding.copy(), "weight": quality, "count": 1}],
+                    "confidence":   match_score,
+                    "n_matches":    1,
+                    "is_confirmed": is_confirmed,
+                    "is_archived":  False,
                 }
                 return
 
-            entry["label"]     = label
-            entry["n_matches"] += 1
-            # Running weighted mean of match scores
-            n = entry["n_matches"]
-            entry["confidence"] = entry["confidence"] * (n - 1) / n + match_score / n
+            entry["label"]       = label
+            entry["is_confirmed"] = is_confirmed
+            n = entry["n_matches"] + 1
+            entry["n_matches"]   = n
+            entry["confidence"]  = entry["confidence"] * (n - 1) / n + match_score / n
 
-            if update_centroid:
-                old_w  = entry["weight_sum"]
-                old_c  = entry["centroid"]
-                new_w  = old_w + quality
-                # Weighted mean update
-                combined = old_c * old_w + new_embedding * quality
-                norm     = np.linalg.norm(combined)
-                entry["centroid"]   = combined / norm if norm > 0 else combined
-                entry["weight_sum"] = new_w
+            if update_prototypes:
+                _update_prototypes(
+                    entry["prototypes"],
+                    new_embedding, quality,
+                    self._max_prototypes,
+                    self._proto_merge,
+                )
 
     def _snapshot(self) -> dict:
+        """Thread-safe shallow copy.  Prototype lists are shared read-only."""
         with self._rw.read():
             return {k: {**v} for k, v in self._cache.items()}
 
@@ -308,17 +378,14 @@ class InsightFacePipeline:
         stream_id: Optional[str] = None,
     ) -> tuple[str, str, float]:
         """
-        Match embedding against quality-weighted centroid cache.
+        Match embedding against multi-prototype cache.
 
-        Outlier handling
-        ----------------
-        If the best match score >= threshold but < OUTLIER_MIN_SIMILARITY of
-        the centroid, the embedding is stored in DB (useful for clustering) but
-        does NOT update the centroid.  This prevents a single bad frame from
-        corrupting the identity.
+        Scoring: best_score = max cosine similarity across all prototypes of each identity.
+        Outlier guard: if match >= threshold but < outlier_min_sim, store embedding
+        in DB (helps clustering) but do NOT update prototypes.
 
         Returns (identity_id, label, match_score).
-        match_score = 0.0 when a new identity is created.
+        score = 0.0 on new identity creation.
         """
         from face.models import FaceIdentity, FaceEmbedding
         from extensions import db
@@ -329,25 +396,23 @@ class InsightFacePipeline:
         best_score : float         = 0.0
 
         for identity_id, data in cache.items():
-            score = float(np.dot(embedding, data["centroid"]))
+            score = _proto_max_similarity(data["prototypes"], embedding)
             if score > best_score:
                 best_score = score
                 best_id    = identity_id
                 best_label = data["label"]
 
         if best_id and best_score >= self._threshold:
-            # Outlier check: if the embedding is unusually far from the centroid,
-            # store it (helps clustering) but don't corrupt the centroid.
             is_outlier = best_score < self._outlier_min_sim
             if is_outlier:
                 logger.debug(
-                    "Outlier embedding for '%s': score=%.4f < outlier_min=%.4f — stored, centroid unchanged",
+                    "Outlier for '%s': score=%.4f < outlier_min=%.4f — stored, prototypes unchanged",
                     best_label, best_score, self._outlier_min_sim,
                 )
 
             emb_row               = FaceEmbedding(identity_id=best_id, stream_id=stream_id)
             emb_row.embedding     = embedding
-            emb_row.det_score     = quality  # quality_score stored in det_score column
+            emb_row.det_score     = quality
             emb_row.quality_score = quality
             db.session.add(emb_row)
             db.session.commit()
@@ -355,8 +420,11 @@ class InsightFacePipeline:
             self._patch_cache(
                 best_id, best_label, embedding, quality,
                 match_score=best_score,
-                update_centroid=not is_outlier,
+                update_prototypes=not is_outlier,
+                is_confirmed=cache[best_id].get("is_confirmed", False),
             )
+            logger.debug("Matched '%s' score=%.4f (prototypes=%d)",
+                         best_label, best_score, len(cache[best_id]["prototypes"]))
             return best_id, best_label, best_score
 
         # No match → create new identity
