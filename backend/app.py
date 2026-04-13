@@ -27,7 +27,9 @@ def create_app(config_class=Config) -> Flask:
     _register_extra_routes(app)
     _register_frontend_catch_all(app)
     _register_error_handlers(app)
-    _init_services(app)
+
+    if not app.config.get("_SKIP_SERVICES", False):
+        _init_services(app)
 
     return app
 
@@ -81,14 +83,16 @@ def _register_blueprints(app):
 def _register_extra_routes(app):
     @app.get("/health")
     def health():
-        yolo = app.extensions.get("yolo_service")
-        face = app.extensions.get("face_pipeline")
+        yolo        = app.extensions.get("yolo_service")
+        face        = app.extensions.get("face_pipeline")
+        task_queue  = app.extensions.get("task_queue")
         return jsonify({
             "status":        "healthy",
             "version":       __version__,
             "model_loaded":  yolo.is_loaded if yolo else False,
             "face_ready":    face.is_ready  if face else False,
             "device":        yolo._device   if yolo else "unknown",
+            "queue_dropped": task_queue.dropped_count if task_queue else 0,
         })
 
     @app.get("/version")
