@@ -43,14 +43,12 @@ class Config:
     INSIGHTFACE_MODEL: str = os.environ.get("INSIGHTFACE_MODEL", "buffalo_l")
     # 0.55 is the reliable lower bound for ArcFace same-person on occluded surveillance footage
     # 0.45 (old default) was too low — caused identity fragmentation
-    # ArcFace cosine similarity for same person in surveillance video:
-    #   clean frontal pair:       0.70 – 0.92
-    #   frontal vs 30° turn:      0.50 – 0.65
-    #   frontal vs 45° turn:      0.38 – 0.52
-    #   motion-blurred frame:     0.35 – 0.50
-    # 0.55 was calibrated for clean photos — too strict for video.
-    # 0.40 captures the 30–45° turn range with minimal false positives.
-    IDENTITY_MATCH_THRESHOLD: float = float(os.environ.get("IDENTITY_MATCH_THRESHOLD", "0.40"))
+    # ArcFace cosine similarity for same person in surveillance video with PPE:
+    #   quality-weighted mean, frontal vs 25° turn, 35% occlusion: 0.38–0.50
+    #   different person: -0.10–0.15
+    # 0.35 captures cross-track same-person while keeping good margin over
+    # different-person scores. Suggestions cover the 0.30–0.35 uncertain range.
+    IDENTITY_MATCH_THRESHOLD: float = float(os.environ.get("IDENTITY_MATCH_THRESHOLD", "0.35"))
     # Minimum combined quality score to accept an embedding (det_score × area_ratio)
     # Lowered to 0.30 — a det_score=0.70 face at 20% crop area scores 0.35.
     # Too strict a quality gate silently drops valid embeddings and starves the tracker.
@@ -77,9 +75,15 @@ class Config:
 
     # ── Merge suggestion engine ───────────────────────────────────────────────
     # Minimum cross-identity similarity to surface as a merge suggestion
-    # Merge suggestion threshold — lowered to match video-domain similarity range.
-    # Two singleton identities of the same person typically score 0.45–0.65.
-    SUGGESTION_THRESHOLD: float = float(os.environ.get("SUGGESTION_THRESHOLD", "0.50"))
+    # Suggestion threshold: MUST be below IDENTITY_MATCH_THRESHOLD so that
+    # pairs that failed auto-matching are still surfaced for operator review.
+    # The cost of a false suggestion (operator clicks "Not the same") is trivial;
+    # the cost of a missed suggestion (operator manually hunts through 100s of
+    # identities) is high.  Set well below 0.35 to catch all uncertain pairs.
+    SUGGESTION_THRESHOLD: float = float(os.environ.get("SUGGESTION_THRESHOLD", "0.28"))
+    # Soft threshold for the coverage signal in identity_similarity().
+    # Lowered from 0.60 to match the video-domain same-person range.
+    SIMILARITY_SOFT_THRESHOLD: float = float(os.environ.get("SIMILARITY_SOFT_THRESHOLD", "0.35"))
     # Maximum suggestions returned per call
     SUGGESTION_MAX_RESULTS: int = int(os.environ.get("SUGGESTION_MAX_RESULTS", "30"))
     # Minimum cosine similarity to update centroid (below this = outlier, stored but ignored)
