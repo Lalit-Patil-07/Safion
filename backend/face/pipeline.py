@@ -365,10 +365,118 @@ class InsightFacePipeline:
                     self._proto_merge,
                 )
 
-    def _snapshot(self) -> dict:
-        """Thread-safe shallow copy.  Prototype lists are shared read-only."""
-        with self._rw.read():
-            return {k: {**v} for k, v in self._cache.items()}
+    # ── Track-level match + store ─────────────────────────────────────────────
+    def match_and_store_track(
+        self,
+        embeddings: list,
+        qualities: list,
+        stream_id: Optional[str] = None,
+    ) -> tuple[str, str, float]:
+        """
+        Called at track confirmation.  Two-step operation:
+
+        MATCH using quality-weighted mean
+          Mean is more stable than any individual frame — it averages out
+          per-frame pose jitter and produces a more representative vector.
+          Individual frames score LOWER than means (confirmed empirically).
+
+        STORE all individual embeddings (not just the mean)
+          Each frame is a separate DB row, allowing _build_prototypes() to
+          reconstruct the full appearance diversity for future matching and
+          clustering.  This also gives DBSCAN more data points to work with.
+
+        Returns (identity_id, label, match_score).
+        """
+        from face.models import FaceIdentity, FaceEmbedding
+        from extensions import db
+
+        if not embeddings or not qualities:
+            return self.match_or_create(embeddings[0] if embeddings else None,
+                                        qualities[0] if qualities else 0.0,
+                                        stream_id=stream_id)
+
+        # ── Step 1: compute quality-weighted mean for matching ────────────────
+        emb_matrix = np.stack(embeddings).astype(np.float32)
+        w          = np.array(qualities, dtype=np.float32)
+        w_sum      = w.sum()
+        if w_sum > 0:
+            mean_emb = (emb_matrix * (w / w_sum)[:, None]).sum(axis=0)
+        else:
+            mean_emb = emb_matrix.mean(axis=0)
+        norm = np.linalg.norm(mean_emb)
+        if norm > 0:
+            mean_emb = mean_emb / norm
+
+        best_quality = float(max(qualities))
+
+        # ── Step 2: match mean against cache ─────────────────────────────────
+        cache      = self._snapshot()
+        best_id    : Optional[str] = None
+        best_label : str           = ""
+        best_score : float         = 0.0
+
+        for identity_id, data in cache.items():
+            score = _proto_max_similarity(data["prototypes"], mean_emb)
+            if score > best_score:
+                best_score = score
+                best_id    = identity_id
+                best_label = data["label"]
+
+        matched = best_id and best_score >= self._threshold
+
+        if not matched:
+            # Create new identity
+            best_label = FaceIdentity.next_label()
+            identity   = FaceIdentity(label=best_label, is_confirmed=False,
+                                      identity_confidence=0.0)
+            db.session.add(identity)
+            db.session.flush()
+            best_id    = identity.id
+            best_score = 0.0
+            logger.info("New identity from track: '%s' (mean_quality=%.3f, n_embs=%d)",
+                        best_label, best_quality, len(embeddings))
+        else:
+            logger.debug("Track matched '%s' (mean_score=%.4f, n_embs=%d)",
+                         best_label, best_score, len(embeddings))
+
+        # ── Step 3: store ALL individual embeddings ───────────────────────────
+        # Filter: keep those above quality_min to avoid polluting the gallery
+        quality_threshold = self._quality_min
+        stored = 0
+        for emb, q in zip(embeddings, qualities):
+            if q < quality_threshold:
+                continue
+            row               = FaceEmbedding(identity_id=best_id, stream_id=stream_id)
+            row.embedding     = emb
+            row.det_score     = q
+            row.quality_score = q
+            db.session.add(row)
+            stored += 1
+
+        # Fallback: if all frames were below quality, store the best one
+        if stored == 0:
+            best_idx      = int(np.argmax(qualities))
+            row           = FaceEmbedding(identity_id=best_id, stream_id=stream_id)
+            row.embedding = embeddings[best_idx]
+            row.det_score = qualities[best_idx]
+            row.quality_score = qualities[best_idx]
+            db.session.add(row)
+            stored = 1
+
+        db.session.commit()
+
+        # ── Step 4: patch cache using mean embedding ──────────────────────────
+        is_outlier = matched and best_score < self._outlier_min_sim
+        self._patch_cache(
+            best_id, best_label, mean_emb, best_quality,
+            match_score=best_score,
+            update_prototypes=not is_outlier,
+            is_confirmed=cache.get(best_id, {}).get("is_confirmed", False) if matched else False,
+        )
+
+        logger.debug("match_and_store_track: identity='%s' score=%.4f stored=%d embs",
+                     best_label, best_score, stored)
+        return best_id, best_label, best_score
 
     # ── Match / create ────────────────────────────────────────────────────────
     def match_or_create(
@@ -443,3 +551,9 @@ class InsightFacePipeline:
         self._patch_cache(identity.id, label, embedding, quality, match_score=0.0)
         logger.info("New identity: '%s' quality=%.3f", label, quality)
         return identity.id, label, 0.0
+
+
+    def _snapshot(self) -> dict:
+        """Thread-safe shallow copy.  Prototype lists are shared read-only."""
+        with self._rw.read():
+            return {k: {**v} for k, v in self._cache.items()}
