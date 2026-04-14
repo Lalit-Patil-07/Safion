@@ -1,0 +1,30 @@
+services:
+  safion:
+    image: ghcr.io/lalit-patil-07/safion:latest
+    ports:
+      - "5000:5000"
+    env_file:
+      - .env
+    volumes:
+      # Model weights (read-only — provided by host)
+      - ./best.pt:/app/best.pt:ro
+      # Persistent application data
+      - safion_db:/app/backend/safion.db
+      - safion_violations:/app/backend/violations_images
+      - safion_temp:/app/backend/temp
+      # InsightFace model cache — avoids re-downloading buffalo_l on every start
+      - safion_insightface:/root/.insightface
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+
+volumes:
+  safion_db:
+  safion_violations:
+  safion_temp:
+  safion_insightface:
