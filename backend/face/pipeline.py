@@ -425,12 +425,9 @@ class InsightFacePipeline:
         matched = best_id and best_score >= self._threshold
 
         if not matched:
-            # Create new identity
-            best_label = FaceIdentity.next_label()
-            identity   = FaceIdentity(label=best_label, is_confirmed=False,
-                                      identity_confidence=0.0)
-            db.session.add(identity)
-            db.session.flush()
+            # Create new identity — atomic label generation + flush
+            identity   = FaceIdentity.create_auto()
+            best_label = identity.label
             best_id    = identity.id
             best_score = 0.0
             logger.info("New identity from track: '%s' (mean_quality=%.3f, n_embs=%d)",
@@ -535,11 +532,9 @@ class InsightFacePipeline:
                          best_label, best_score, len(cache[best_id]["prototypes"]))
             return best_id, best_label, best_score
 
-        # No match → create new identity
-        label    = FaceIdentity.next_label()
-        identity = FaceIdentity(label=label, is_confirmed=False, identity_confidence=0.0)
-        db.session.add(identity)
-        db.session.flush()
+        # No match → create new identity (atomic label generation + flush)
+        identity = FaceIdentity.create_auto()
+        label    = identity.label
 
         emb_row               = FaceEmbedding(identity_id=identity.id, stream_id=stream_id)
         emb_row.embedding     = embedding
