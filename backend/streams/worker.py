@@ -24,13 +24,24 @@ Frame → YOLO → persons[] → FaceTracker.update(bbox) → Track
                      │                └── track.identity_id already set?
                      │                          │              │
                      │                         Yes            No
-                     │                          │              └── match_or_create(mean_emb)
+                     │                          │              └── match_and_store_track()
                      │                          │                  set track.identity_id
                      │
                (skip — accumulating)
                                 │
                     ViolationJob for associated violations
                     using track.identity_id + track-level cooldown
+
+BUG FIX (this version)
+-----------------------
+Previously, violation dispatch was gated entirely on track.identity_id being set.
+In PPE footage, helmets/masks prevent InsightFace from detecting faces, so
+n_embeddings never reaches TRACK_MIN_EMBEDDINGS, is_confirmed() never fires,
+track.identity_id stays None, and no violations are ever stored.
+
+Fix: gate violation dispatch on frame confirmation (frames_seen >= min_frames),
+not on identity assignment.  Tracks with no face embeddings still dispatch
+violations with identity_id=None; the task queue slow-path handles those.
 """
 
 import logging
@@ -138,6 +149,13 @@ def stream_worker(app, stream_id, source_type, source_path, stop_event, stream_s
 
             persons, violations = split_detections(detections)
 
+            # DEBUG: log detection counts every 30 frames
+            if frame_count % 30 == 0:
+                logger.debug(
+                    "[stream=%s frame=%d] YOLO: %d persons, %d violations detected",
+                    stream_id[:8], frame_count, len(persons), len(violations),
+                )
+
             # ── Per-person tracking + embedding ───────────────────────────────
             active_bboxes: list[list[float]] = []
 
@@ -149,7 +167,6 @@ def stream_worker(app, stream_id, source_type, source_path, stop_event, stream_s
                 track = tracker.update(bbox)
 
                 # Extract face embedding from person crop every frame
-                # (cheap when face not detected — embed_crop returns [])
                 px1, py1, px2, py2 = map(int, bbox)
                 px1, py1 = max(0, px1), max(0, py1)
                 px2, py2 = min(frame.shape[1], px2), min(frame.shape[0], py2)
@@ -161,15 +178,26 @@ def stream_worker(app, stream_id, source_type, source_path, stop_event, stream_s
                 with app.app_context():
                     faces = pipeline.embed_crop(crop)
 
+                # DEBUG: log embedding result periodically per track
+                if frame_count % 30 == 0:
+                    logger.debug(
+                        "[stream=%s] track=%d frames=%d embs=%d faces_detected=%d",
+                        stream_id[:8], track.track_id,
+                        track.frames_seen, track.n_embeddings, len(faces),
+                    )
+
                 if faces:
                     best = max(faces, key=lambda f: f["quality_score"])
                     track.add_embedding(best["embedding"], best["quality_score"])
 
-                # ── Identity assignment (delayed until confirmed) ───────────
+                # ── Identity assignment (delayed until confirmed by both gates) ──
                 if tracker.is_confirmed(track) and track.identity_id is None:
-                    # Use match_and_store_track:
-                    #   - Matches using quality-weighted mean (more stable than any frame)
-                    #   - Stores ALL individual embeddings (richer future clustering data)
+                    # DEBUG: log before identity match
+                    logger.debug(
+                        "[stream=%s] track=%d confirmed (frames=%d, embs=%d) — matching identity",
+                        stream_id[:8], track.track_id,
+                        track.frames_seen, track.n_embeddings,
+                    )
                     if track.pending_embeddings:
                         with app.app_context():
                             identity_id, label, score = pipeline.match_and_store_track(
@@ -180,14 +208,23 @@ def stream_worker(app, stream_id, source_type, source_path, stop_event, stream_s
                         track.identity_id    = identity_id
                         track.identity_label = label
                         logger.debug(
-                            "Track %d confirmed → identity '%s' (score=%.3f, frames=%d, embs=%d)",
-                            track.track_id, label, score,
-                            track.frames_seen, track.n_embeddings,
+                            "[stream=%s] track=%d → identity '%s' (score=%.3f)",
+                            stream_id[:8], track.track_id, label, score,
                         )
 
-                # ── Violation dispatch (only for confirmed tracks) ──────────
-                if track.identity_id is None:
-                    continue  # still accumulating — don't log violations yet
+                # ── Violation dispatch ─────────────────────────────────────────
+                # Gate: track must be frame-confirmed (frames_seen >= min_frames).
+                #
+                # FIX: Previously gated on track.identity_id being set, which
+                # requires face embeddings.  In PPE footage, helmets/masks block
+                # InsightFace → no embeddings → identity never created → violations
+                # silently dropped forever.
+                #
+                # Now: dispatch as soon as the person has been consistently visible
+                # for min_frames frames.  Tracks without a face identity dispatch
+                # with identity_id=None; the task queue slow-path handles those.
+                if track.frames_seen < tracker.min_frames:
+                    continue  # still too new — avoid one-frame ghost violations
 
                 associated = [
                     v for v in violations
@@ -197,13 +234,20 @@ def stream_worker(app, stream_id, source_type, source_path, stop_event, stream_s
                     continue
 
                 now = time.monotonic()
-                # Track-level cooldown — one violation log per identity per window
+                # Track-level cooldown — one violation log per track per window
                 if now - track.last_violation_time < violation_cd:
                     continue
 
                 track.last_violation_time = now
 
                 for viol in associated:
+                    # DEBUG: log before DB insert
+                    logger.debug(
+                        "[stream=%s] track=%d dispatching violation '%s' "
+                        "(identity=%s, frames=%d, embs=%d)",
+                        stream_id[:8], track.track_id, viol["class_name"],
+                        track.identity_id, track.frames_seen, track.n_embeddings,
+                    )
                     from tasks.queue import ViolationJob
                     task_queue.put(ViolationJob(
                         stream_id=stream_id,
@@ -211,9 +255,10 @@ def stream_worker(app, stream_id, source_type, source_path, stop_event, stream_s
                         confidence=viol["confidence"],
                         person_crop_bgr=crop.copy(),
                         person_bbox=bbox,
-                        # Pass resolved identity directly — skip match_or_create in worker
+                        # identity_id may be None if face not detectable (PPE occlusion).
+                        # task queue slow-path will attempt embed_crop + match_or_create.
                         identity_id=track.identity_id,
-                        identity_label=track.identity_label,
+                        identity_label=track.identity_label or "Unknown Person",
                     ))
 
             # Mark tracks not seen this frame
