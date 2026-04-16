@@ -1,6 +1,7 @@
 """
 Face + Violation models — v1.2
 """
+import threading
 import uuid
 from datetime import datetime, timezone
 
@@ -10,6 +11,10 @@ from extensions import db
 
 def _new_id(): return str(uuid.uuid4())
 def _now():    return datetime.now(timezone.utc)
+
+# Serialises next_label() + flush() so no two threads can interleave them
+# and produce duplicate auto-labels.
+_label_lock = threading.Lock()
 
 
 class FaceIdentity(db.Model):
@@ -45,7 +50,11 @@ class FaceIdentity(db.Model):
 
     @staticmethod
     def next_label() -> str:
-        """Collision-safe sequential label using MAX(numeric suffix)."""
+        """
+        Collision-safe sequential label using MAX(numeric suffix).
+
+        Callers that need atomicity must hold _label_lock (or use create_auto()).
+        """
         from sqlalchemy import text
         result = db.session.execute(
             text(
@@ -54,6 +63,24 @@ class FaceIdentity(db.Model):
             )
         ).scalar()
         return f"Person_{int(result) + 1:03d}"
+
+    @classmethod
+    def create_auto(cls) -> "FaceIdentity":
+        """
+        Atomically generate a unique auto-label and flush the new identity.
+
+        Acquires _label_lock so that the read-MAX → generate-label → flush
+        sequence is never interleaved by a concurrent thread, preventing
+        duplicate-label IntegrityErrors under multi-threaded workers.
+
+        Returns the flushed (not yet committed) FaceIdentity instance.
+        """
+        with _label_lock:
+            label    = cls.next_label()
+            identity = cls(label=label, is_confirmed=False, identity_confidence=0.0)
+            db.session.add(identity)
+            db.session.flush()
+            return identity
 
     def to_dict(self) -> dict:
         thumbnail = (
