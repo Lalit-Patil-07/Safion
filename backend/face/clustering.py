@@ -106,13 +106,10 @@ def run_clustering(
         cluster_embs    = [all_embs[i] for i in cluster_indices]
 
         if cluster_id == -1:
-            # Noise: ensure each has an identity
+            # Noise: ensure each has an identity (atomic label generation)
             for emb in cluster_embs:
                 if emb.identity_id is None:
-                    label    = FaceIdentity.next_label()
-                    identity = FaceIdentity(label=label, is_confirmed=False)
-                    db.session.add(identity)
-                    db.session.flush()
+                    identity = FaceIdentity.create_auto()
                     emb.identity_id = identity.id
                     embeddings_reassigned += 1
             continue
@@ -134,10 +131,8 @@ def run_clustering(
                 canonical = candidate
 
         if canonical is None:
-            label     = FaceIdentity.next_label()
-            canonical = FaceIdentity(label=label, is_confirmed=False)
-            db.session.add(canonical)
-            db.session.flush()
+            # Create canonical for this cluster (atomic label generation)
+            canonical = FaceIdentity.create_auto()
 
         # Re-assign embeddings
         for emb in cluster_embs:
