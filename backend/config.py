@@ -11,12 +11,11 @@ class Config:
     BASE_DIR: str = os.path.dirname(os.path.abspath(__file__))
     SQLALCHEMY_DATABASE_URI: str = os.environ.get(
         "DATABASE_URL",
-        f"sqlite:///{os.path.join(BASE_DIR, 'safion.db')}",
+        "postgresql://safion:safion@localhost:5432/safion",
     )
     SQLALCHEMY_TRACK_MODIFICATIONS: bool = False
     SQLALCHEMY_ENGINE_OPTIONS: dict = {
-        "pool_pre_ping": True,
-        "connect_args": {"check_same_thread": False},
+        "pool_pre_ping": True,   # drop stale connections before use
     }
 
     # ── JWT ───────────────────────────────────────────────────────────────────
@@ -39,66 +38,34 @@ class Config:
     YOLO_DEVICE: str = os.environ.get("YOLO_DEVICE", "auto")
 
     # ── InsightFace ───────────────────────────────────────────────────────────
-    # buffalo_l: RetinaFace detection + ArcFace 512-dim embeddings (L2-normalised)
     INSIGHTFACE_MODEL: str = os.environ.get("INSIGHTFACE_MODEL", "buffalo_l")
-    # 0.55 is the reliable lower bound for ArcFace same-person on occluded surveillance footage
-    # 0.45 (old default) was too low — caused identity fragmentation
-    # ArcFace cosine similarity for same person in surveillance video with PPE:
-    #   quality-weighted mean, frontal vs 25° turn, 35% occlusion: 0.38–0.50
-    #   different person: -0.10–0.15
-    # 0.35 captures cross-track same-person while keeping good margin over
-    # different-person scores. Suggestions cover the 0.30–0.35 uncertain range.
     IDENTITY_MATCH_THRESHOLD: float = float(os.environ.get("IDENTITY_MATCH_THRESHOLD", "0.35"))
-    # Minimum combined quality score to accept an embedding (det_score × area_ratio)
-    # Lowered to 0.30 — a det_score=0.70 face at 20% crop area scores 0.35.
-    # Too strict a quality gate silently drops valid embeddings and starves the tracker.
     EMBEDDING_QUALITY_MIN: float = float(os.environ.get("EMBEDDING_QUALITY_MIN", "0.30"))
 
     # ── Multi-prototype identity model ────────────────────────────────────────
-    # Max prototypes kept per identity in the live cache (K in K-prototype model)
     MAX_PROTOTYPES: int = int(os.environ.get("MAX_PROTOTYPES", "5"))
-    # Cosine similarity above which a new embedding merges into an existing prototype
-    # rather than creating a new one (same pose / lighting condition)
-    # Lowered: two embeddings from consecutive frames of the same person score ~0.70–0.85.
-    # 0.70 ensures nearby frames merge into the same prototype.
     PROTO_MERGE_THRESHOLD: float = float(os.environ.get("PROTO_MERGE_THRESHOLD", "0.70"))
 
     # ── Face tracker (temporal consistency) ─────────────────────────────────
-    # Frames before a track is considered confirmed (reduces premature identity creation)
     TRACK_MIN_FRAMES: int = int(os.environ.get("TRACK_MIN_FRAMES", "3"))
-    # Max frames a track can be missing before it's evicted (IoU-based)
     TRACK_MAX_LOST: int = int(os.environ.get("TRACK_MAX_LOST", "10"))
-    # IoU threshold for linking a detection to an existing track
     TRACK_IOU_THRESHOLD: float = float(os.environ.get("TRACK_IOU_THRESHOLD", "0.30"))
-    # Min embeddings before identity is created for a confirmed track
     TRACK_MIN_EMBEDDINGS: int = int(os.environ.get("TRACK_MIN_EMBEDDINGS", "3"))
 
     # ── Merge suggestion engine ───────────────────────────────────────────────
-    # Minimum cross-identity similarity to surface as a merge suggestion
-    # Suggestion threshold: MUST be below IDENTITY_MATCH_THRESHOLD so that
-    # pairs that failed auto-matching are still surfaced for operator review.
-    # The cost of a false suggestion (operator clicks "Not the same") is trivial;
-    # the cost of a missed suggestion (operator manually hunts through 100s of
-    # identities) is high.  Set well below 0.35 to catch all uncertain pairs.
     SUGGESTION_THRESHOLD: float = float(os.environ.get("SUGGESTION_THRESHOLD", "0.28"))
-    # Soft threshold for the coverage signal in identity_similarity().
-    # Lowered from 0.60 to match the video-domain same-person range.
     SIMILARITY_SOFT_THRESHOLD: float = float(os.environ.get("SIMILARITY_SOFT_THRESHOLD", "0.35"))
-    # Maximum suggestions returned per call
     SUGGESTION_MAX_RESULTS: int = int(os.environ.get("SUGGESTION_MAX_RESULTS", "30"))
-    # Minimum cosine similarity to update centroid (below this = outlier, stored but ignored)
     OUTLIER_MIN_SIMILARITY: float = float(os.environ.get("OUTLIER_MIN_SIMILARITY", "0.35"))
     FACE_DET_SCORE_MIN: float = float(os.environ.get("FACE_DET_SCORE_MIN", "0.6"))
 
     # ── Clustering ────────────────────────────────────────────────────────────
     CLUSTER_EPS: float = float(os.environ.get("CLUSTER_EPS", "0.40"))
     CLUSTER_MIN_SAMPLES: int = int(os.environ.get("CLUSTER_MIN_SAMPLES", "2"))
-    # Auto-trigger clustering every N violations (0 = disabled)
     CLUSTER_EVERY_N_VIOLATIONS: int = int(os.environ.get("CLUSTER_EVERY_N_VIOLATIONS", "50"))
 
     # ── Stream / Violations ───────────────────────────────────────────────────
     VIOLATION_COOLDOWN_SECONDS: int = int(os.environ.get("VIOLATION_COOLDOWN", "10"))
-    # Identity-level dedup window (seconds) — authoritative second layer
     IDENTITY_VIOLATION_COOLDOWN: int = int(os.environ.get("IDENTITY_VIOLATION_COOLDOWN", "30"))
     STREAM_JPEG_QUALITY: int = int(os.environ.get("STREAM_JPEG_QUALITY", "80"))
     MAX_CONCURRENT_STREAMS: int = int(os.environ.get("MAX_CONCURRENT_STREAMS", "8"))

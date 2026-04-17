@@ -1,11 +1,14 @@
 """
-Face + Violation models — v1.2
+Face + Violation models — v1.3
+Embedding storage migrated from LargeBinary to pgvector Vector(512).
+External interface (embedding property) is unchanged.
 """
 import threading
 import uuid
 from datetime import datetime, timezone
 
 import numpy as np
+from pgvector.sqlalchemy import Vector
 from extensions import db
 
 
@@ -30,12 +33,7 @@ class FaceIdentity(db.Model):
     created_at  = db.Column(db.DateTime(timezone=True), nullable=False, default=_now)
     last_seen   = db.Column(db.DateTime(timezone=True), nullable=True, index=True)
 
-    # Stable thumbnail — set once on first violation, never changed automatically
-    thumbnail_filename = db.Column(db.Text, nullable=True)
-
-    # Running mean of match_scores at identification time.
-    # High value (→1.0) = identity is consistently well-matched = stable.
-    # Low value (→0.0)  = identity is being assigned from weak matches = uncertain.
+    thumbnail_filename  = db.Column(db.Text, nullable=True)
     identity_confidence = db.Column(db.Float, nullable=False, default=0.0)
 
     embeddings = db.relationship(
@@ -50,11 +48,7 @@ class FaceIdentity(db.Model):
 
     @staticmethod
     def next_label() -> str:
-        """
-        Collision-safe sequential label using MAX(numeric suffix).
-
-        Callers that need atomicity must hold _label_lock (or use create_auto()).
-        """
+        """Collision-safe sequential label using MAX(numeric suffix)."""
         from sqlalchemy import text
         result = db.session.execute(
             text(
@@ -68,12 +62,7 @@ class FaceIdentity(db.Model):
     def create_auto(cls) -> "FaceIdentity":
         """
         Atomically generate a unique auto-label and flush the new identity.
-
-        Acquires _label_lock so that the read-MAX → generate-label → flush
-        sequence is never interleaved by a concurrent thread, preventing
-        duplicate-label IntegrityErrors under multi-threaded workers.
-
-        Returns the flushed (not yet committed) FaceIdentity instance.
+        Holds _label_lock so no two threads produce the same label.
         """
         with _label_lock:
             label    = cls.next_label()
@@ -121,26 +110,36 @@ class FaceEmbedding(db.Model):
     __tablename__  = "face_embeddings"
     __table_args__ = {"extend_existing": True}
 
-    id              = db.Column(db.String(36), primary_key=True, default=_new_id)
-    identity_id     = db.Column(
+    id          = db.Column(db.String(36), primary_key=True, default=_new_id)
+    identity_id = db.Column(
         db.String(36), db.ForeignKey("face_identities.id"),
         nullable=True, index=True,
     )
-    embedding_bytes = db.Column(db.LargeBinary(2048), nullable=False)
-    det_score       = db.Column(db.Float, nullable=True)
-    quality_score   = db.Column(db.Float, nullable=True)   # combined quality [0,1]
-    stream_id       = db.Column(db.String(36), nullable=True, index=True)
-    created_at      = db.Column(db.DateTime(timezone=True), nullable=False, default=_now)
+
+    # pgvector column — stores 512-dim L2-normalised ArcFace embedding.
+    # Replaces the previous LargeBinary(2048) bytes column.
+    # The `embedding` property below keeps the external interface identical
+    # (accepts/returns np.ndarray) so pipeline, clustering, and similarity
+    # code requires no changes.
+    embedding_vec = db.Column(Vector(512), nullable=False)
+
+    det_score     = db.Column(db.Float, nullable=True)
+    quality_score = db.Column(db.Float, nullable=True)
+    stream_id     = db.Column(db.String(36), nullable=True, index=True)
+    created_at    = db.Column(db.DateTime(timezone=True), nullable=False, default=_now)
 
     @property
     def embedding(self) -> np.ndarray:
-        return np.frombuffer(self.embedding_bytes, dtype=np.float32).copy()
+        """Return the stored vector as a float32 numpy array."""
+        return np.asarray(self.embedding_vec, dtype=np.float32)
 
     @embedding.setter
     def embedding(self, value: np.ndarray) -> None:
+        """Accept a numpy array, L2-normalise, and store as a plain Python list."""
         arr  = np.asarray(value, dtype=np.float32).ravel()
         norm = np.linalg.norm(arr)
-        self.embedding_bytes = (arr / norm if norm > 0 else arr).tobytes()
+        normalised = arr / norm if norm > 0 else arr
+        self.embedding_vec = normalised.tolist()
 
 
 class Violation(db.Model):

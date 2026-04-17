@@ -20,5 +20,9 @@ scikit-learn>=1.4.0
 # Numerics
 numpy>=1.26.0
 
+# Database — PostgreSQL driver + pgvector
+psycopg2-binary>=2.9.0
+pgvector>=0.2.0
+
 # WSGI server (production)
 gunicorn>=21.2.0

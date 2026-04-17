@@ -6,6 +6,7 @@ import os
 import uuid
 
 from flask import Flask, send_from_directory, jsonify, request
+from sqlalchemy import text
 
 from config import Config
 from extensions import db, bcrypt, jwt
@@ -60,6 +61,12 @@ def _init_extensions(app):
     with app.app_context():
         import auth.models   # noqa: F401
         import face.models   # noqa: F401
+
+        # Enable pgvector extension before creating tables.
+        # Safe to run on every startup — IF NOT EXISTS is a no-op.
+        db.session.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+        db.session.commit()
+
         db.create_all()
 
 
@@ -120,12 +127,6 @@ def _register_extra_routes(app):
 
     @app.get("/violators/unknown")
     def get_unknown_violators():
-        """
-        Returns violations belonging to unconfirmed (auto-created) identities.
-        These are the Person_NNN auto-labels that operators haven't named yet.
-        The frontend Identity Recognition page uses this to let operators
-        select and name groups of violation images.
-        """
         from face.models import Violation, FaceIdentity
         unconfirmed_ids = [
             i.id for i in FaceIdentity.query.filter_by(is_confirmed=False).all()
@@ -170,24 +171,20 @@ def _init_services(app):
     from tasks.queue import TaskQueue
     from streams.manager import StreamManager
 
-    # YOLO — unchanged
     yolo = YOLOService()
     yolo.init_app(app)
     app.extensions["yolo_service"] = yolo
 
-    # InsightFace pipeline
     pipeline = InsightFacePipeline(app.config)
     pipeline.init_app(app)
     app.extensions["face_pipeline"] = pipeline
     with app.app_context():
         pipeline.reload_cache()
 
-    # Async task queue
     task_queue = TaskQueue()
     task_queue.init_app(app)
     app.extensions["task_queue"] = task_queue
 
-    # Stream manager
     stream_manager = StreamManager()
     stream_manager.init_app(app)
     app.extensions["stream_manager"] = stream_manager
