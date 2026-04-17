@@ -14,147 +14,188 @@ Safion is a real-time Personal Protective Equipment (PPE) detection system desig
 ## 💻 Technology Stack
 
 - **Backend**: Python, Flask, PyTorch
-- **AI Model**: YOLOv11m for object detection and face_recognition for identity clustering
+- **AI Model**: YOLOv11m for object detection and InsightFace (ArcFace) for identity clustering
 - **GPU Acceleration**: NVIDIA CUDA
 - **Real-time Video Processing**: OpenCV
 - **Frontend**: React, Tailwind CSS, Lucide React
+- **Database**: PostgreSQL 18 with pgvector
 - **Containerization**: Docker
 
 ## 🚀 Getting Started
 
-There are two ways to run this application: using Docker for a quick and easy setup, or setting up a Local Development Environment for contributing to the code.
-
 ### Option 1: Docker Deployment (Recommended)
 
-This is the simplest way to get the application running.
+**Prerequisites:** Docker with NVIDIA Container Toolkit installed.
 
-**Prerequisites:**
-- Docker installed
-
-**Build and Run the Container:**
+> Docker deployment uses a pgvector-enabled PostgreSQL container (`pgvector/pgvector:pg18`).
+> No manual PostgreSQL or pgvector installation is required.
 
 ```bash
-docker build -t ppe-detection-system .
-docker run -p 5000:5000 --gpus all ppe-detection-system
+cp .env.example .env          # edit secrets if needed
+docker compose up -d
 ```
 
-Open your browser and navigate to `http://localhost:5000`.
+Open `http://localhost:5000`.
+
+---
 
 ### Option 2: Local Development Setup
 
-Follow these steps to run the application on your local machine with full GPU acceleration.
+#### Script responsibilities
 
-#### 1. Prerequisites
+| Script | What it does |
+|---|---|
+| `scripts/install_postgres.sh` | Installs PostgreSQL 18 and the pgvector system extension |
+| `scripts/setup_db.sh` | Creates the database user, database, grants, and enables the extension |
+| `backend/run.py` | Auto-triggers `setup_db.sh` on first start if DB is not ready |
 
-- An NVIDIA GPU
-- Python 3.10+
-- Node.js and npm
-- Git
+---
 
-#### 2. Install NVIDIA CUDA Toolkit
+#### System Requirements
 
-- **Install NVIDIA Drivers**: Ensure you have the latest drivers for your GPU from the [NVIDIA website](https://www.nvidia.com/Download/index.aspx).
-- **Install CUDA Toolkit**: Download and install the CUDA Toolkit version 12.1 or newer from the [NVIDIA Developer website](https://developer.nvidia.com/cuda-downloads). This is essential for GPU acceleration.
+| Requirement | Version |
+|---|---|
+| Python | 3.10+ |
+| Node.js | 18+ |
+| PostgreSQL | **18 exactly** |
+| pgvector | system extension (see step 1 — **not a pip package**) |
+| NVIDIA CUDA Toolkit | 12.1+ |
 
-#### 3. Clone the Repository
+---
+
+#### 1. Install PostgreSQL 18 and pgvector
+
+> **`pgvector` is a PostgreSQL server extension — it is not installed via pip.**
+> The `psycopg2-binary` pip package handles the Python DB driver.
+> The extension itself must be present on the PostgreSQL server.
 
 ```bash
-git clone <repository_url>
-cd ppe-detection-system
+sudo bash scripts/install_postgres.sh
 ```
 
-#### 4. Setup the Backend
+This installs PostgreSQL 18, attempts `postgresql-18-pgvector` via apt, and falls back to a source build if the package is unavailable.
 
-Create and activate a Python virtual environment:
+**Verify the extension is available:**
+```bash
+sudo -u postgres psql -c \
+  "SELECT name, default_version FROM pg_available_extensions WHERE name = 'vector';"
+```
+A row must appear. If it does not, the extension install failed — do not proceed.
+
+---
+
+#### 2. Configure environment
+
+```bash
+cp .env.example .env
+```
+
+Default values work for local development without changes.
+
+---
+
+#### 3. Create the database
+
+```bash
+bash scripts/setup_db.sh
+```
+
+Creates the PostgreSQL user, database, grants privileges, and enables the `vector` extension. Fully idempotent.
+
+If the `postgres` superuser has a password:
+```bash
+PGPASSWORD=your_postgres_password bash scripts/setup_db.sh
+```
+
+---
+
+#### 4. Install Python dependencies
 
 ```bash
 python -m venv venv
-
-# On Windows
-.\venv\Scripts\activate
-
-# On macOS/Linux
 source venv/bin/activate
-```
 
-**Install PyTorch**: Install the GPU-enabled version of PyTorch that matches your CUDA installation. Get the correct command from the [PyTorch official website](https://pytorch.org/get-started/locally/). For example:
-
-```bash
+# PyTorch with CUDA — get the correct command from https://pytorch.org/get-started/locally/
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
-```
 
-**Install Dlib**: Compiling dlib can be difficult. It's easier to install a pre-compiled version.
-
-1. Go to the [Dlib_Windows_Python3.x repository](https://github.com/z-mahmud22/Dlib_Windows_Python3.x)
-2. Find the `.whl` file that matches your Python version (e.g., `dlib-19.22.99-cp310-cp310-win_amd64.whl` for Python 3.10)
-3. Download the file and install it using pip:
-
-```bash
-pip install "path/to/your/downloaded/dlib-file.whl"
-```
-
-Install the rest of the dependencies:
-
-```bash
 pip install -r backend/requirements.txt
 ```
 
-#### 5. Setup the Frontend
+---
 
-Navigate to the frontend directory and install the Node.js dependencies:
-
-```bash
-cd frontend
-npm install
-```
-
-#### 6. Run the Application
-
-**Start the Backend Server**: In your first terminal, from the root directory, run:
+#### 5. Install frontend dependencies
 
 ```bash
-python backend/app_server.py
+cd frontend && npm install
 ```
 
-**Start the Frontend Server**: Open a second terminal and from the frontend directory, run:
+---
 
+#### 6. Run the application
+
+**Backend** (from project root):
 ```bash
-npm start
+python backend/run.py
 ```
 
-The application will open automatically in your browser at `http://localhost:3000`.
+On first run, `run.py` detects if the database or `vector` extension is missing and runs `setup_db.sh` automatically. On subsequent starts it performs a single fast check and skips setup.
+
+**Frontend** (separate terminal):
+```bash
+cd frontend && npm start
+```
+
+Opens at `http://localhost:3000`.
+
+---
+
+#### Troubleshooting
+
+| Error | Cause | Fix |
+|---|---|---|
+| `could not connect to server` | PostgreSQL not running | `sudo systemctl start postgresql` |
+| `extension "vector" is not available` | pgvector not installed at system level | Re-run `sudo bash scripts/install_postgres.sh` |
+| `role "safion" does not exist` | setup_db.sh not run | `bash scripts/setup_db.sh` |
+| `password authentication failed` | Wrong password in `.env` | Check `DATABASE_URL` in `.env` |
+| `could not load library "vector.so"` | pgvector built for wrong PG version | Reinstall pgvector against PG 18 |
+
+---
 
 ## 📂 Project Structure
 
 ```
 ppe-detection-system/
 ├── backend/
-│   ├── app_server.py       # Flask backend server
-│   ├── known_faces/        # Stores images for recognized individuals
-│   └── requirements.txt    # Python dependencies
+│   ├── app.py                  # Flask application factory
+│   ├── run.py                  # Development entry point (auto-setup)
+│   ├── config.py               # Configuration (reads from .env)
+│   ├── auth/                   # JWT authentication
+│   ├── detection/              # YOLO inference + violation association
+│   ├── face/                   # InsightFace pipeline, identity models, clustering
+│   ├── streams/                # Stream manager, worker, IoU tracker
+│   ├── tasks/                  # Async violation queue
+│   ├── violations/             # Violation log routes
+│   └── requirements.txt        # Python dependencies
 ├── frontend/
-│   ├── src/
-│   │   └── App.js          # Main React application component
-│   └── package.json        # Node.js dependencies
-├── best.pt                 # Trained YOLOv11m model weights
-├── Dockerfile              # Docker configuration for deployment
-└── training_file.ipynb     # Jupyter notebook for model training
+│   ├── src/App.js              # React application
+│   └── package.json
+├── scripts/
+│   ├── install_postgres.sh     # Installs PostgreSQL 18 + pgvector (run once, as root)
+│   └── setup_db.sh             # Creates DB user, database, enables extension
+├── best.pt                     # Trained YOLOv11m model weights
+├── docker-compose.yml
+├── Dockerfile
+└── .env.example
 ```
 
 ## 🧠 The AI Model
 
-The detection model is a YOLOv11m model trained on a custom dataset for PPE detection. The model is fine-tuned to detect the following classes:
+The detection model is a YOLOv11m model trained on a custom dataset for PPE detection. The model detects the following classes:
 
-- Hardhat
-- Mask
-- NO-Hardhat
-- NO-Mask
-- NO-Safety Vest
-- Person
-- Safety Cone
-- Safety Vest
-- Machinery
-- Vehicle
+- Hardhat / NO-Hardhat
+- Mask / NO-Mask
+- Safety Vest / NO-Safety Vest
+- Person, Safety Cone, Machinery, Vehicle
 
 ## 📋 Future Improvements
 
