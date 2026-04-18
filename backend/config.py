@@ -2,29 +2,58 @@ import os
 from datetime import timedelta
 
 
+def _require(key: str) -> str:
+    """Return the environment variable or raise RuntimeError immediately."""
+    val = os.environ.get(key, "")
+    if not val:
+        raise RuntimeError(f"Missing required environment variable: {key}")
+    return val
+
+
 class Config:
     # ── Core ──────────────────────────────────────────────────────────────────
-    SECRET_KEY: str = os.environ.get("SECRET_KEY", "dev-secret-change-in-production")
-    DEBUG: bool = os.environ.get("DEBUG", "false").lower() == "true"
+    SECRET_KEY: str  = _require("SECRET_KEY")
+    DEBUG: bool      = os.environ.get("DEBUG", "false").lower() == "true"
 
     # ── Database ──────────────────────────────────────────────────────────────
     BASE_DIR: str = os.path.dirname(os.path.abspath(__file__))
-    SQLALCHEMY_DATABASE_URI: str = os.environ.get(
-        "DATABASE_URL",
-        "postgresql://safion:safion@localhost:5432/safion",
+
+    # All five DB_* variables are mandatory — startup fails immediately if any
+    # are absent.  DATABASE_URL is never read from the environment.
+    _DB_USER:     str = os.environ.get("DB_USER",     "")
+    _DB_PASSWORD: str = os.environ.get("DB_PASSWORD", "")
+    _DB_HOST:     str = os.environ.get("DB_HOST",     "")
+    _DB_PORT:     str = os.environ.get("DB_PORT",     "")
+    _DB_NAME:     str = os.environ.get("DB_NAME",     "")
+
+    _missing_db = [
+        k for k, v in {
+            "DB_USER": _DB_USER, "DB_PASSWORD": _DB_PASSWORD,
+            "DB_HOST": _DB_HOST, "DB_PORT": _DB_PORT, "DB_NAME": _DB_NAME,
+        }.items() if not v
+    ]
+    if _missing_db:
+        raise RuntimeError(
+            f"Missing required DB configuration (DB_*) in environment: "
+            f"{', '.join(_missing_db)}"
+        )
+
+    SQLALCHEMY_DATABASE_URI: str = (
+        f"postgresql://{_DB_USER}:{_DB_PASSWORD}@{_DB_HOST}:{_DB_PORT}/{_DB_NAME}"
     )
     SQLALCHEMY_TRACK_MODIFICATIONS: bool = False
     SQLALCHEMY_ENGINE_OPTIONS: dict = {
-        "pool_pre_ping": True,   # drop stale connections before use
+        "pool_pre_ping": True,
     }
 
     # ── JWT ───────────────────────────────────────────────────────────────────
-    JWT_SECRET_KEY: str = os.environ.get("JWT_SECRET_KEY", "jwt-secret-change-in-production")
-    JWT_ACCESS_TOKEN_EXPIRES: timedelta = timedelta(hours=int(os.environ.get("JWT_ACCESS_HOURS", "8")))
-    JWT_REFRESH_TOKEN_EXPIRES: timedelta = timedelta(days=int(os.environ.get("JWT_REFRESH_DAYS", "30")))
-    JWT_ALGORITHM: str = "HS256"
+    JWT_SECRET_KEY: str           = _require("JWT_SECRET_KEY")
+    JWT_ACCESS_TOKEN_EXPIRES: timedelta  = timedelta(hours=int(_require("JWT_ACCESS_HOURS")))
+    JWT_REFRESH_TOKEN_EXPIRES: timedelta = timedelta(days=int(_require("JWT_REFRESH_DAYS")))
+    JWT_ALGORITHM: str            = "HS256"
 
     # ── File Storage ──────────────────────────────────────────────────────────
+    # Path defaults are derived from BASE_DIR — these are internal, not operator config.
     VIOLATIONS_IMAGE_DIR: str = os.environ.get(
         "VIOLATIONS_IMAGE_DIR", os.path.join(BASE_DIR, "violations_images")
     )
@@ -33,49 +62,50 @@ class Config:
     )
 
     # ── YOLO ──────────────────────────────────────────────────────────────────
-    MODEL_PATH: str = os.environ.get("MODEL_PATH", os.path.join(BASE_DIR, "..", "best.pt"))
-    CONFIDENCE_THRESHOLD: float = float(os.environ.get("CONFIDENCE_THRESHOLD", "0.4"))
-    YOLO_DEVICE: str = os.environ.get("YOLO_DEVICE", "auto")
+    # MODEL_PATH default is relative to BASE_DIR — internal path, not operator config.
+    MODEL_PATH: str            = os.environ.get("MODEL_PATH", os.path.join(BASE_DIR, "..", "best.pt"))
+    CONFIDENCE_THRESHOLD: float = float(_require("CONFIDENCE_THRESHOLD"))
+    YOLO_DEVICE: str            = _require("YOLO_DEVICE")
 
     # ── InsightFace ───────────────────────────────────────────────────────────
-    INSIGHTFACE_MODEL: str = os.environ.get("INSIGHTFACE_MODEL", "buffalo_l")
-    IDENTITY_MATCH_THRESHOLD: float = float(os.environ.get("IDENTITY_MATCH_THRESHOLD", "0.35"))
-    EMBEDDING_QUALITY_MIN: float = float(os.environ.get("EMBEDDING_QUALITY_MIN", "0.30"))
+    INSIGHTFACE_MODEL: str          = _require("INSIGHTFACE_MODEL")
+    IDENTITY_MATCH_THRESHOLD: float = float(_require("IDENTITY_MATCH_THRESHOLD"))
+    EMBEDDING_QUALITY_MIN: float    = float(_require("EMBEDDING_QUALITY_MIN"))
 
     # ── Multi-prototype identity model ────────────────────────────────────────
-    MAX_PROTOTYPES: int = int(os.environ.get("MAX_PROTOTYPES", "5"))
-    PROTO_MERGE_THRESHOLD: float = float(os.environ.get("PROTO_MERGE_THRESHOLD", "0.70"))
+    MAX_PROTOTYPES: int         = int(_require("MAX_PROTOTYPES"))
+    PROTO_MERGE_THRESHOLD: float = float(_require("PROTO_MERGE_THRESHOLD"))
 
-    # ── Face tracker (temporal consistency) ─────────────────────────────────
-    TRACK_MIN_FRAMES: int = int(os.environ.get("TRACK_MIN_FRAMES", "3"))
-    TRACK_MAX_LOST: int = int(os.environ.get("TRACK_MAX_LOST", "10"))
-    TRACK_IOU_THRESHOLD: float = float(os.environ.get("TRACK_IOU_THRESHOLD", "0.30"))
-    TRACK_MIN_EMBEDDINGS: int = int(os.environ.get("TRACK_MIN_EMBEDDINGS", "3"))
+    # ── Face tracker ─────────────────────────────────────────────────────────
+    TRACK_MIN_FRAMES: int     = int(_require("TRACK_MIN_FRAMES"))
+    TRACK_MAX_LOST: int       = int(_require("TRACK_MAX_LOST"))
+    TRACK_IOU_THRESHOLD: float = float(_require("TRACK_IOU_THRESHOLD"))
+    TRACK_MIN_EMBEDDINGS: int = int(_require("TRACK_MIN_EMBEDDINGS"))
 
     # ── Merge suggestion engine ───────────────────────────────────────────────
-    SUGGESTION_THRESHOLD: float = float(os.environ.get("SUGGESTION_THRESHOLD", "0.28"))
-    SIMILARITY_SOFT_THRESHOLD: float = float(os.environ.get("SIMILARITY_SOFT_THRESHOLD", "0.35"))
-    SUGGESTION_MAX_RESULTS: int = int(os.environ.get("SUGGESTION_MAX_RESULTS", "30"))
-    OUTLIER_MIN_SIMILARITY: float = float(os.environ.get("OUTLIER_MIN_SIMILARITY", "0.35"))
-    FACE_DET_SCORE_MIN: float = float(os.environ.get("FACE_DET_SCORE_MIN", "0.6"))
+    SUGGESTION_THRESHOLD: float    = float(_require("SUGGESTION_THRESHOLD"))
+    SIMILARITY_SOFT_THRESHOLD: float = float(_require("SIMILARITY_SOFT_THRESHOLD"))
+    SUGGESTION_MAX_RESULTS: int    = int(_require("SUGGESTION_MAX_RESULTS"))
+    OUTLIER_MIN_SIMILARITY: float  = float(_require("OUTLIER_MIN_SIMILARITY"))
+    FACE_DET_SCORE_MIN: float      = float(_require("FACE_DET_SCORE_MIN"))
 
     # ── Clustering ────────────────────────────────────────────────────────────
-    CLUSTER_EPS: float = float(os.environ.get("CLUSTER_EPS", "0.40"))
-    CLUSTER_MIN_SAMPLES: int = int(os.environ.get("CLUSTER_MIN_SAMPLES", "2"))
-    CLUSTER_EVERY_N_VIOLATIONS: int = int(os.environ.get("CLUSTER_EVERY_N_VIOLATIONS", "50"))
+    CLUSTER_EPS: float         = float(_require("CLUSTER_EPS"))
+    CLUSTER_MIN_SAMPLES: int   = int(_require("CLUSTER_MIN_SAMPLES"))
+    CLUSTER_EVERY_N_VIOLATIONS: int = int(_require("CLUSTER_EVERY_N_VIOLATIONS"))
 
     # ── Stream / Violations ───────────────────────────────────────────────────
-    VIOLATION_COOLDOWN_SECONDS: int = int(os.environ.get("VIOLATION_COOLDOWN", "10"))
-    IDENTITY_VIOLATION_COOLDOWN: int = int(os.environ.get("IDENTITY_VIOLATION_COOLDOWN", "30"))
-    STREAM_JPEG_QUALITY: int = int(os.environ.get("STREAM_JPEG_QUALITY", "80"))
-    MAX_CONCURRENT_STREAMS: int = int(os.environ.get("MAX_CONCURRENT_STREAMS", "8"))
-    FRAME_RATE_LIMIT: int = int(os.environ.get("FRAME_RATE_LIMIT", "30"))
+    VIOLATION_COOLDOWN_SECONDS: int  = int(_require("VIOLATION_COOLDOWN"))
+    IDENTITY_VIOLATION_COOLDOWN: int = int(_require("IDENTITY_VIOLATION_COOLDOWN"))
+    STREAM_JPEG_QUALITY: int    = int(_require("STREAM_JPEG_QUALITY"))
+    MAX_CONCURRENT_STREAMS: int = int(_require("MAX_CONCURRENT_STREAMS"))
+    FRAME_RATE_LIMIT: int       = int(_require("FRAME_RATE_LIMIT"))
 
     # ── Task Queue ────────────────────────────────────────────────────────────
-    TASK_WORKER_THREADS: int = int(os.environ.get("TASK_WORKER_THREADS", "2"))
-    TASK_QUEUE_MAXSIZE: int = int(os.environ.get("TASK_QUEUE_MAXSIZE", "200"))
+    TASK_WORKER_THREADS: int = int(_require("TASK_WORKER_THREADS"))
+    TASK_QUEUE_MAXSIZE: int  = int(_require("TASK_QUEUE_MAXSIZE"))
 
-    # ── PPE Classes ───────────────────────────────────────────────────────────
+    # ── PPE Classes (internal constant — not configurable via env) ────────────
     PPE_CLASSES: dict = {
         0: {"name": "Hardhat",        "color": "#3B82F6", "safe": True},
         1: {"name": "Mask",           "color": "#10B981", "safe": True},
