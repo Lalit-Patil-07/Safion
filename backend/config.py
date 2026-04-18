@@ -12,31 +12,18 @@ def _require(key: str) -> str:
 
 class Config:
     # ── Core ──────────────────────────────────────────────────────────────────
-    SECRET_KEY: str  = _require("SECRET_KEY")
-    DEBUG: bool      = os.environ.get("DEBUG", "false").lower() == "true"
+    SECRET_KEY: str = _require("SECRET_KEY")
+    DEBUG: bool     = _require("DEBUG").lower() == "true"
 
     # ── Database ──────────────────────────────────────────────────────────────
     BASE_DIR: str = os.path.dirname(os.path.abspath(__file__))
 
-    # All five DB_* variables are mandatory — startup fails immediately if any
-    # are absent.  DATABASE_URL is never read from the environment.
-    _DB_USER:     str = os.environ.get("DB_USER",     "")
-    _DB_PASSWORD: str = os.environ.get("DB_PASSWORD", "")
-    _DB_HOST:     str = os.environ.get("DB_HOST",     "")
-    _DB_PORT:     str = os.environ.get("DB_PORT",     "")
-    _DB_NAME:     str = os.environ.get("DB_NAME",     "")
-
-    _missing_db = [
-        k for k, v in {
-            "DB_USER": _DB_USER, "DB_PASSWORD": _DB_PASSWORD,
-            "DB_HOST": _DB_HOST, "DB_PORT": _DB_PORT, "DB_NAME": _DB_NAME,
-        }.items() if not v
-    ]
-    if _missing_db:
-        raise RuntimeError(
-            f"Missing required DB configuration (DB_*) in environment: "
-            f"{', '.join(_missing_db)}"
-        )
+    # All five DB_* variables are mandatory — DATABASE_URL is never read from env.
+    _DB_USER:     str = _require("DB_USER")
+    _DB_PASSWORD: str = _require("DB_PASSWORD")
+    _DB_HOST:     str = _require("DB_HOST")
+    _DB_PORT:     str = _require("DB_PORT")
+    _DB_NAME:     str = _require("DB_NAME")
 
     SQLALCHEMY_DATABASE_URI: str = (
         f"postgresql://{_DB_USER}:{_DB_PASSWORD}@{_DB_HOST}:{_DB_PORT}/{_DB_NAME}"
@@ -47,13 +34,13 @@ class Config:
     }
 
     # ── JWT ───────────────────────────────────────────────────────────────────
-    JWT_SECRET_KEY: str           = _require("JWT_SECRET_KEY")
+    JWT_SECRET_KEY: str                  = _require("JWT_SECRET_KEY")
     JWT_ACCESS_TOKEN_EXPIRES: timedelta  = timedelta(hours=int(_require("JWT_ACCESS_HOURS")))
     JWT_REFRESH_TOKEN_EXPIRES: timedelta = timedelta(days=int(_require("JWT_REFRESH_DAYS")))
-    JWT_ALGORITHM: str            = "HS256"
+    JWT_ALGORITHM: str                   = "HS256"
 
     # ── File Storage ──────────────────────────────────────────────────────────
-    # Path defaults are derived from BASE_DIR — these are internal, not operator config.
+    # Path defaults are derived from BASE_DIR — internal, not operator config.
     VIOLATIONS_IMAGE_DIR: str = os.environ.get(
         "VIOLATIONS_IMAGE_DIR", os.path.join(BASE_DIR, "violations_images")
     )
@@ -63,7 +50,7 @@ class Config:
 
     # ── YOLO ──────────────────────────────────────────────────────────────────
     # MODEL_PATH default is relative to BASE_DIR — internal path, not operator config.
-    MODEL_PATH: str            = os.environ.get("MODEL_PATH", os.path.join(BASE_DIR, "..", "best.pt"))
+    MODEL_PATH: str             = os.environ.get("MODEL_PATH", os.path.join(BASE_DIR, "..", "best.pt"))
     CONFIDENCE_THRESHOLD: float = float(_require("CONFIDENCE_THRESHOLD"))
     YOLO_DEVICE: str            = _require("YOLO_DEVICE")
 
@@ -73,33 +60,33 @@ class Config:
     EMBEDDING_QUALITY_MIN: float    = float(_require("EMBEDDING_QUALITY_MIN"))
 
     # ── Multi-prototype identity model ────────────────────────────────────────
-    MAX_PROTOTYPES: int         = int(_require("MAX_PROTOTYPES"))
+    MAX_PROTOTYPES: int          = int(_require("MAX_PROTOTYPES"))
     PROTO_MERGE_THRESHOLD: float = float(_require("PROTO_MERGE_THRESHOLD"))
 
     # ── Face tracker ─────────────────────────────────────────────────────────
-    TRACK_MIN_FRAMES: int     = int(_require("TRACK_MIN_FRAMES"))
-    TRACK_MAX_LOST: int       = int(_require("TRACK_MAX_LOST"))
+    TRACK_MIN_FRAMES: int      = int(_require("TRACK_MIN_FRAMES"))
+    TRACK_MAX_LOST: int        = int(_require("TRACK_MAX_LOST"))
     TRACK_IOU_THRESHOLD: float = float(_require("TRACK_IOU_THRESHOLD"))
-    TRACK_MIN_EMBEDDINGS: int = int(_require("TRACK_MIN_EMBEDDINGS"))
+    TRACK_MIN_EMBEDDINGS: int  = int(_require("TRACK_MIN_EMBEDDINGS"))
 
     # ── Merge suggestion engine ───────────────────────────────────────────────
-    SUGGESTION_THRESHOLD: float    = float(_require("SUGGESTION_THRESHOLD"))
+    SUGGESTION_THRESHOLD: float      = float(_require("SUGGESTION_THRESHOLD"))
     SIMILARITY_SOFT_THRESHOLD: float = float(_require("SIMILARITY_SOFT_THRESHOLD"))
-    SUGGESTION_MAX_RESULTS: int    = int(_require("SUGGESTION_MAX_RESULTS"))
-    OUTLIER_MIN_SIMILARITY: float  = float(_require("OUTLIER_MIN_SIMILARITY"))
-    FACE_DET_SCORE_MIN: float      = float(_require("FACE_DET_SCORE_MIN"))
+    SUGGESTION_MAX_RESULTS: int      = int(_require("SUGGESTION_MAX_RESULTS"))
+    OUTLIER_MIN_SIMILARITY: float    = float(_require("OUTLIER_MIN_SIMILARITY"))
+    FACE_DET_SCORE_MIN: float        = float(_require("FACE_DET_SCORE_MIN"))
 
     # ── Clustering ────────────────────────────────────────────────────────────
-    CLUSTER_EPS: float         = float(_require("CLUSTER_EPS"))
-    CLUSTER_MIN_SAMPLES: int   = int(_require("CLUSTER_MIN_SAMPLES"))
+    CLUSTER_EPS: float              = float(_require("CLUSTER_EPS"))
+    CLUSTER_MIN_SAMPLES: int        = int(_require("CLUSTER_MIN_SAMPLES"))
     CLUSTER_EVERY_N_VIOLATIONS: int = int(_require("CLUSTER_EVERY_N_VIOLATIONS"))
 
     # ── Stream / Violations ───────────────────────────────────────────────────
     VIOLATION_COOLDOWN_SECONDS: int  = int(_require("VIOLATION_COOLDOWN"))
     IDENTITY_VIOLATION_COOLDOWN: int = int(_require("IDENTITY_VIOLATION_COOLDOWN"))
-    STREAM_JPEG_QUALITY: int    = int(_require("STREAM_JPEG_QUALITY"))
-    MAX_CONCURRENT_STREAMS: int = int(_require("MAX_CONCURRENT_STREAMS"))
-    FRAME_RATE_LIMIT: int       = int(_require("FRAME_RATE_LIMIT"))
+    STREAM_JPEG_QUALITY: int         = int(_require("STREAM_JPEG_QUALITY"))
+    MAX_CONCURRENT_STREAMS: int      = int(_require("MAX_CONCURRENT_STREAMS"))
+    FRAME_RATE_LIMIT: int            = int(_require("FRAME_RATE_LIMIT"))
 
     # ── Task Queue ────────────────────────────────────────────────────────────
     TASK_WORKER_THREADS: int = int(_require("TASK_WORKER_THREADS"))
