@@ -1,7 +1,6 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import { RefreshCw, Trash2, Loader } from 'lucide-react';
 
-
 const API = '';
 
 const fmt = (iso) => iso ? new Date(iso).toLocaleString() : '—';
@@ -33,7 +32,11 @@ const ViolationLogPage = ({ onModalImage }) => {
     fetch(`${API}/violations`).then(r => r.json()).then(setViolations).catch(() => []).finally(() => setLoading(false));
   }, []);
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+    const intervalId = setInterval(load, 5000);
+    return () => clearInterval(intervalId);
+  }, [load]);
 
   const clear = async () => {
     if (!window.confirm('Clear all violations?')) return;
