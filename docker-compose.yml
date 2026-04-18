@@ -1,30 +1,50 @@
 services:
-  safion:
-    image: ghcr.io/lalit-patil-07/safion:latest
-    ports:
-      - "5000:5000"
+
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: safion_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
+    volumes:
+      - safion_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build: .
+    container_name: safion_app
+    restart: unless-stopped
     env_file:
       - .env
+    environment:
+      # Override DB_HOST so the app reaches the db service by container name.
+      # .env keeps DB_HOST=localhost for local development — this takes precedence
+      # inside Docker without requiring a separate .env file.
+      DB_HOST: db
+    ports:
+      - "5000:5000"
     volumes:
-      # Model weights (read-only — provided by host)
       - ./best.pt:/app/best.pt:ro
-      # Persistent application data
-      - safion_db:/app/backend/safion.db
-      - safion_violations:/app/backend/violations_images
-      - safion_temp:/app/backend/temp
-      # InsightFace model cache — avoids re-downloading buffalo_l on every start
       - safion_insightface:/root/.insightface
+      - safion_data:/app/backend/violations_images
+      - safion_temp:/app/backend/temp
+    depends_on:
+      db:
+        condition: service_healthy
     deploy:
       resources:
         reservations:
           devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-    restart: unless-stopped
+            - capabilities: [gpu]
 
 volumes:
-  safion_db:
-  safion_violations:
-  safion_temp:
+  safion_pgdata:
   safion_insightface:
+  safion_data:
+  safion_temp:
