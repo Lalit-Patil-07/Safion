@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
+import ViolationLogPage from "./ViolationLogPage";
 import {
   Camera, Upload, Video, CheckCircle, XCircle, Settings,
   Play, StopCircle, Loader, Shield, ShieldOff, ShieldCheck,
@@ -899,72 +900,6 @@ const IdentityManagementPage = ({ onModalImage }) => {
           onModalImage={onModalImage}
           onRefresh={() => load(page, search, confirmed)} />
       )}
-    </div>
-  );
-};
-
-// ── Violation Log ─────────────────────────────────────────────────────────────
-const ViolationLogPage = ({ onModalImage }) => {
-  const [violations, setViolations] = useState([]);
-  const [loading, setLoading] = useState(true);
-
-  const load = useCallback(() => {
-    setLoading(true);
-    fetch(`${API}/violations`).then(r => r.json()).then(setViolations).catch(() => []).finally(() => setLoading(false));
-  }, []);
-
-  useEffect(() => { load(); }, []);
-
-  const clear = async () => {
-    if (!window.confirm('Clear all violations?')) return;
-    await fetch(`${API}/violations/clear`, { method: 'POST' });
-    setViolations([]);
-  };
-
-  return (
-    <div className="p-6">
-      <div className="flex items-center justify-between mb-5">
-        <div>
-          <h2 className="text-2xl font-bold text-text">Violations</h2>
-          <p className="text-sm text-text-secondary">{violations.length} logged</p>
-        </div>
-        <div className="flex gap-2">
-          <button onClick={load} className="p-2 border border-border rounded-lg hover:bg-border text-text-secondary"><RefreshCw size={14} /></button>
-          <button onClick={clear} className="flex items-center gap-2 px-3 py-2 bg-red-500 text-white text-sm rounded-lg hover:bg-red-600">
-            <Trash2 size={13} /> Clear all
-          </button>
-        </div>
-      </div>
-
-      <div className="bg-card border border-border rounded-xl overflow-hidden">
-        {loading ? (
-          <div className="flex justify-center py-16"><Loader size={28} className="animate-spin text-text-secondary" /></div>
-        ) : violations.length === 0 ? (
-          <p className="text-sm text-text-secondary text-center py-14">No violations recorded.</p>
-        ) : (
-          <div className="divide-y divide-border">
-            {violations.map(v => (
-              <div key={v.id} className="flex items-start gap-4 p-4 hover:bg-card-secondary transition-all">
-                {v.image_path ? (
-                  <img src={`${API}${v.image_path}`} alt="violation"
-                       className="w-14 h-14 object-cover rounded-lg cursor-pointer hover:opacity-80 flex-shrink-0"
-                       onClick={() => onModalImage(`${API}${v.image_path}`)} />
-                ) : <div className="w-14 h-14 bg-card-secondary rounded-lg flex-shrink-0" />}
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="text-sm font-semibold text-text">{v.name}</span>
-                    <ViolationChip type={v.violation_type} />
-                  </div>
-                  <div className="text-xs text-text-secondary">{fmt(v.timestamp)}</div>
-                  {v.match_score != null && (
-                    <div className="text-xs text-text-secondary">Match: {(v.match_score * 100).toFixed(0)}%</div>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
     </div>
   );
 };
