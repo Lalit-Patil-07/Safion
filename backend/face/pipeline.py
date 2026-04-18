@@ -40,6 +40,7 @@ import logging
 import threading
 from typing import Optional
 
+import time
 import cv2
 import numpy as np
 
@@ -201,6 +202,17 @@ def _update_prototypes(
             prototypes[min_idx] = {"vec": new_emb.copy(), "weight": quality, "count": 1}
 
 
+def _temporal_bonus(data: dict, recent_window: float, boost: float) -> float:
+    """
+    Return `boost` if this identity was seen within `recent_window` seconds,
+    else 0.0.  Runs in O(1) from in-memory cache — no DB reads.
+    """
+    last_seen = data.get("last_seen", 0.0)
+    if last_seen and (time.time() - last_seen) < recent_window:
+        return boost
+    return 0.0
+
+
 # ── Pipeline ──────────────────────────────────────────────────────────────────
 class InsightFacePipeline:
     """
@@ -225,6 +237,8 @@ class InsightFacePipeline:
         self._outlier_min_sim = getattr(config, "OUTLIER_MIN_SIMILARITY",      0.35)
         self._max_prototypes  = getattr(config, "MAX_PROTOTYPES",              5)
         self._proto_merge     = getattr(config, "PROTO_MERGE_THRESHOLD",       0.80)
+        self._temporal_boost  = getattr(config, "TEMPORAL_BOOST",             0.05)
+        self._recent_window   = getattr(config, "RECENT_WINDOW",              10.0)
         self._rw              = _RWLock()
         self._cache: dict     = {}
         self._ready           = False
@@ -314,6 +328,7 @@ class InsightFacePipeline:
                 "n_matches":    len(rows),
                 "is_confirmed": identity.is_confirmed,
                 "is_archived":  False,   # filtered above
+                "last_seen":    identity.last_seen.timestamp() if identity.last_seen else 0.0,
             }
 
         with self._rw.write():
@@ -348,11 +363,13 @@ class InsightFacePipeline:
                     "n_matches":    1,
                     "is_confirmed": is_confirmed,
                     "is_archived":  False,
+                    "last_seen":    time.time(),
                 }
                 return
 
             entry["label"]       = label
             entry["is_confirmed"] = is_confirmed
+            entry["last_seen"]    = time.time()
             n = entry["n_matches"] + 1
             entry["n_matches"]   = n
             entry["confidence"]  = entry["confidence"] * (n - 1) / n + match_score / n
@@ -416,7 +433,8 @@ class InsightFacePipeline:
         best_score : float         = 0.0
 
         for identity_id, data in cache.items():
-            score = _proto_max_similarity(data["prototypes"], mean_emb)
+            score = (_proto_max_similarity(data["prototypes"], mean_emb)
+                     + _temporal_bonus(data, self._recent_window, self._temporal_boost))
             if score > best_score:
                 best_score = score
                 best_id    = identity_id
@@ -501,7 +519,8 @@ class InsightFacePipeline:
         best_score : float         = 0.0
 
         for identity_id, data in cache.items():
-            score = _proto_max_similarity(data["prototypes"], embedding)
+            score = (_proto_max_similarity(data["prototypes"], embedding)
+                     + _temporal_bonus(data, self._recent_window, self._temporal_boost))
             if score > best_score:
                 best_score = score
                 best_id    = identity_id

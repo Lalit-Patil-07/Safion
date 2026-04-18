@@ -92,6 +92,10 @@ class Config:
     TASK_WORKER_THREADS: int = int(_require("TASK_WORKER_THREADS"))
     TASK_QUEUE_MAXSIZE: int  = int(_require("TASK_QUEUE_MAXSIZE"))
 
+    # ── Identity temporal bias ───────────────────────────────────────────────
+    TEMPORAL_BOOST: float  = float(_require("TEMPORAL_BOOST"))
+    RECENT_WINDOW: float   = float(_require("RECENT_WINDOW"))
+
     # ── PPE Classes (internal constant — not configurable via env) ────────────
     PPE_CLASSES: dict = {
         0: {"name": "Hardhat",        "color": "#3B82F6", "safe": True},
