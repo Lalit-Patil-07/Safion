@@ -26,8 +26,9 @@ def _load_dotenv() -> None:
 
     with open(env_path) as fh:
         for line in fh:
-            # Strip inline comments and surrounding whitespace
-            line = line.split("#", 1)[0].strip()
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
             if "=" not in line:
                 continue
             key, _, raw_value = line.partition("=")
