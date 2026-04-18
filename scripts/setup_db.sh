@@ -39,7 +39,8 @@ read_env_var() {
     | sed -E "
         s/^[[:space:]]*${key}[[:space:]]*=[[:space:]]*//
         s/[[:space:]]*#.*\$//" \
-    | sed -E "s/^['\"]//; s/['\"]$//; s/[[:space:]]*\$//"
+    | sed -E "s/^['\"]//; s/['\"]$//; s/[[:space:]]*\$//" \
+    || true
 }
 
 # ── Read explicit DB variables ────────────────────────────────────────────────
