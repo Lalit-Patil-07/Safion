@@ -11,10 +11,37 @@ import subprocess
 import sys
 
 
+def _load_dotenv() -> None:
+    """
+    Read .env from the project root and set any missing variables into
+    os.environ.  Does not override variables already set in the shell.
+    Supports: KEY=value, KEY="value", KEY='value', inline # comments.
+    No external dependencies.
+    """
+    env_path = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", ".env")
+    )
+    if not os.path.isfile(env_path):
+        return
+
+    with open(env_path) as fh:
+        for line in fh:
+            # Strip inline comments and surrounding whitespace
+            line = line.split("#", 1)[0].strip()
+            if "=" not in line:
+                continue
+            key, _, raw_value = line.partition("=")
+            key = key.strip()
+            value = raw_value.strip().strip("'\"")
+            if key and key not in os.environ:
+                os.environ[key] = value
+
+
 def _db_ready() -> bool:
     """
     Return True if PostgreSQL is reachable AND the vector extension is installed.
-    A single fast query — adds no measurable latency on normal starts.
+    Uses Config.SQLALCHEMY_DATABASE_URI — the same DSN the application uses.
+    A single fast query; adds no measurable latency on normal starts.
     """
     try:
         import psycopg2
@@ -52,6 +79,9 @@ def _run_setup() -> None:
 
 
 if __name__ == "__main__":
+    # Load .env before anything else so Config._require() finds all variables.
+    _load_dotenv()
+
     # Auto-setup: only runs if the DB is unreachable or vector extension is missing.
     # On every normal start this is a single connection + one query (< 5 ms).
     if not _db_ready():
