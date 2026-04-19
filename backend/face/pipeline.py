@@ -230,17 +230,17 @@ class InsightFacePipeline:
     """
 
     def __init__(self, config) -> None:
-        self._model_name      = config.INSIGHTFACE_MODEL
-        self._threshold       = config.IDENTITY_MATCH_THRESHOLD
-        self._det_score_min   = config.FACE_DET_SCORE_MIN
-        self._quality_min     = config.EMBEDDING_QUALITY_MIN
-        self._outlier_min_sim = config.OUTLIER_MIN_SIMILARITY
-        self._max_prototypes  = config.MAX_PROTOTYPES
-        self._proto_merge     = config.PROTO_MERGE_THRESHOLD
-        self._ema_alpha       = config.EMA_ALPHA
-        self._temporal_boost  = config.TEMPORAL_BOOST
-        self._recent_window           = config.RECENT_WINDOW
-        self._strong_match_threshold  = config.STRONG_MATCH_THRESHOLD
+        self._model_name             = config["INSIGHTFACE_MODEL"]
+        self._threshold              = config["IDENTITY_MATCH_THRESHOLD"]
+        self._det_score_min          = config["FACE_DET_SCORE_MIN"]
+        self._quality_min            = config["EMBEDDING_QUALITY_MIN"]
+        self._outlier_min_sim        = config["OUTLIER_MIN_SIMILARITY"]
+        self._max_prototypes         = config["MAX_PROTOTYPES"]
+        self._proto_merge            = config["PROTO_MERGE_THRESHOLD"]
+        self._ema_alpha              = config["EMA_ALPHA"]
+        self._temporal_boost         = config["TEMPORAL_BOOST"]
+        self._recent_window          = config["RECENT_WINDOW"]
+        self._strong_match_threshold = config["STRONG_MATCH_THRESHOLD"]
         self._rw              = _RWLock()
         self._cache: dict     = {}
         self._ready           = False
