@@ -230,16 +230,16 @@ class InsightFacePipeline:
     """
 
     def __init__(self, config) -> None:
-        self._model_name      = getattr(config, "INSIGHTFACE_MODEL",        "buffalo_l")
-        self._threshold       = getattr(config, "IDENTITY_MATCH_THRESHOLD",  0.55)
-        self._det_score_min   = getattr(config, "FACE_DET_SCORE_MIN",         0.60)
-        self._quality_min     = getattr(config, "EMBEDDING_QUALITY_MIN",      0.45)
-        self._outlier_min_sim = getattr(config, "OUTLIER_MIN_SIMILARITY",      0.35)
-        self._max_prototypes  = getattr(config, "MAX_PROTOTYPES",              5)
-        self._proto_merge     = getattr(config, "PROTO_MERGE_THRESHOLD",       0.80)
-        self._ema_alpha       = getattr(config, "EMA_ALPHA",                   0.30)
-        self._temporal_boost  = getattr(config, "TEMPORAL_BOOST",             0.05)
-        self._recent_window   = getattr(config, "RECENT_WINDOW",              10.0)
+        self._model_name      = config.INSIGHTFACE_MODEL
+        self._threshold       = config.IDENTITY_MATCH_THRESHOLD
+        self._det_score_min   = config.FACE_DET_SCORE_MIN
+        self._quality_min     = config.EMBEDDING_QUALITY_MIN
+        self._outlier_min_sim = config.OUTLIER_MIN_SIMILARITY
+        self._max_prototypes  = config.MAX_PROTOTYPES
+        self._proto_merge     = config.PROTO_MERGE_THRESHOLD
+        self._ema_alpha       = config.EMA_ALPHA
+        self._temporal_boost  = config.TEMPORAL_BOOST
+        self._recent_window   = config.RECENT_WINDOW
         self._rw              = _RWLock()
         self._cache: dict     = {}
         self._ready           = False
