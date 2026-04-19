@@ -373,8 +373,9 @@ class InsightFacePipeline:
             entry["is_confirmed"] = is_confirmed
             entry["last_seen"]    = time.time()
             entry["n_matches"]  += 1
-            entry["confidence"] = (self._ema_alpha * match_score
-                                   + (1 - self._ema_alpha) * entry["confidence"])
+            if match_score >= self._strong_match_threshold:
+                entry["confidence"] = (self._ema_alpha * match_score
+                                       + (1 - self._ema_alpha) * entry["confidence"])
 
             if update_prototypes:
                 _update_prototypes(
