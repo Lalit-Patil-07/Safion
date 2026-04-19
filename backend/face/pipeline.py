@@ -239,7 +239,8 @@ class InsightFacePipeline:
         self._proto_merge     = config.PROTO_MERGE_THRESHOLD
         self._ema_alpha       = config.EMA_ALPHA
         self._temporal_boost  = config.TEMPORAL_BOOST
-        self._recent_window   = config.RECENT_WINDOW
+        self._recent_window           = config.RECENT_WINDOW
+        self._strong_match_threshold  = config.STRONG_MATCH_THRESHOLD
         self._rw              = _RWLock()
         self._cache: dict     = {}
         self._ready           = False
@@ -486,7 +487,7 @@ class InsightFacePipeline:
         self._patch_cache(
             best_id, best_label, mean_emb, best_quality,
             match_score=best_score,
-            update_prototypes=not is_outlier,
+            update_prototypes=(not is_outlier) and (best_score >= self._strong_match_threshold),
             is_confirmed=cache.get(best_id, {}).get("is_confirmed", False) if matched else False,
         )
 
@@ -545,7 +546,7 @@ class InsightFacePipeline:
             self._patch_cache(
                 best_id, best_label, embedding, quality,
                 match_score=best_score,
-                update_prototypes=not is_outlier,
+                update_prototypes=(not is_outlier) and (best_score >= self._strong_match_threshold),
                 is_confirmed=cache[best_id].get("is_confirmed", False),
             )
             logger.debug("Matched '%s' score=%.4f (prototypes=%d)",
