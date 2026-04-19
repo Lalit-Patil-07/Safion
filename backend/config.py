@@ -94,6 +94,7 @@ class Config:
 
     # ── Identity temporal bias ───────────────────────────────────────────────
     TEMPORAL_BOOST: float  = float(_require("TEMPORAL_BOOST"))
+    EMA_ALPHA: float       = float(_require("EMA_ALPHA"))
     RECENT_WINDOW: float   = float(_require("RECENT_WINDOW"))
 
     # ── PPE Classes (internal constant — not configurable via env) ────────────

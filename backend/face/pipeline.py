@@ -237,6 +237,7 @@ class InsightFacePipeline:
         self._outlier_min_sim = getattr(config, "OUTLIER_MIN_SIMILARITY",      0.35)
         self._max_prototypes  = getattr(config, "MAX_PROTOTYPES",              5)
         self._proto_merge     = getattr(config, "PROTO_MERGE_THRESHOLD",       0.80)
+        self._ema_alpha       = getattr(config, "EMA_ALPHA",                   0.30)
         self._temporal_boost  = getattr(config, "TEMPORAL_BOOST",             0.05)
         self._recent_window   = getattr(config, "RECENT_WINDOW",              10.0)
         self._rw              = _RWLock()
@@ -371,9 +372,8 @@ class InsightFacePipeline:
             entry["is_confirmed"] = is_confirmed
             entry["last_seen"]    = time.time()
             entry["n_matches"]  += 1
-            _EMA_ALPHA = 0.3
-            entry["confidence"] = (_EMA_ALPHA * match_score
-                                   + (1 - _EMA_ALPHA) * entry["confidence"])
+            entry["confidence"] = (self._ema_alpha * match_score
+                                   + (1 - self._ema_alpha) * entry["confidence"])
 
             if update_prototypes:
                 _update_prototypes(
