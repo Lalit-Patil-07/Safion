@@ -370,9 +370,10 @@ class InsightFacePipeline:
             entry["label"]       = label
             entry["is_confirmed"] = is_confirmed
             entry["last_seen"]    = time.time()
-            n = entry["n_matches"] + 1
-            entry["n_matches"]   = n
-            entry["confidence"]  = entry["confidence"] * (n - 1) / n + match_score / n
+            entry["n_matches"]  += 1
+            _EMA_ALPHA = 0.3
+            entry["confidence"] = (_EMA_ALPHA * match_score
+                                   + (1 - _EMA_ALPHA) * entry["confidence"])
 
             if update_prototypes:
                 _update_prototypes(
