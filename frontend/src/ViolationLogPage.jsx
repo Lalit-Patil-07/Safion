@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { RefreshCw, Trash2, Loader } from 'lucide-react';
 
 const API = '';
@@ -27,9 +27,18 @@ const ViolationLogPage = ({ onModalImage }) => {
   const [violations, setViolations] = useState([]);
   const [loading, setLoading] = useState(true);
 
+  const firstLoad = useRef(true);
+
   const load = useCallback(() => {
-    setLoading(true);
-    fetch(`${API}/violations`).then(r => r.json()).then(setViolations).catch(() => []).finally(() => setLoading(false));
+    if (firstLoad.current) setLoading(true);
+    fetch(`${API}/violations`)
+      .then(r => r.json())
+      .then(setViolations)
+      .catch(() => [])
+      .finally(() => {
+        setLoading(false);
+        firstLoad.current = false;
+      });
   }, []);
 
   useEffect(() => {
