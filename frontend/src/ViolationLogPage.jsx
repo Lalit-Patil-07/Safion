@@ -28,12 +28,30 @@ const ViolationLogPage = ({ onModalImage }) => {
   const [loading, setLoading] = useState(true);
 
   const firstLoad = useRef(true);
+  const prevIdsRef = useRef(new Set());
+  const [newIds, setNewIds] = useState(new Set());
 
   const load = useCallback(() => {
     if (firstLoad.current) setLoading(true);
     fetch(`${API}/violations`)
       .then(r => r.json())
-      .then(setViolations)
+      .then(data => {
+        setViolations(data);
+        const currentIds = new Set(data.map(v => v.id));
+        const prevIds = prevIdsRef.current;
+        const added = new Set([...currentIds].filter(id => !prevIds.has(id)));
+        if (added.size > 0) {
+          setNewIds(prev => new Set([...prev, ...added]));
+          setTimeout(() => {
+            setNewIds(prev => {
+              const updated = new Set(prev);
+              added.forEach(id => updated.delete(id));
+              return updated;
+            });
+          }, 8000);
+        }
+        prevIdsRef.current = currentIds;
+      })
       .catch(() => [])
       .finally(() => {
         setLoading(false);
@@ -78,7 +96,7 @@ const ViolationLogPage = ({ onModalImage }) => {
             {violations.map(v => {
               const faceDetected = v.match_score != null;
               return (
-                <div key={v.id} className="flex items-start gap-4 p-4 hover:bg-card-secondary transition-all">
+                <div key={v.id} className={`flex items-start gap-4 p-4 transition-all ${newIds.has(v.id) ? "bg-green-50 dark:bg-green-900/20" : "hover:bg-card-secondary"}`}>
                   {v.image_path ? (
                     <img src={`${API}${v.image_path}`} alt="violation"
                          className="w-14 h-14 object-cover rounded-lg cursor-pointer hover:opacity-80 flex-shrink-0"
