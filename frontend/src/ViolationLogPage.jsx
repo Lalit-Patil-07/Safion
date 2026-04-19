@@ -67,6 +67,7 @@ const ViolationLogPage = ({ onModalImage }) => {
     return () => {
       clearInterval(intervalId);
       timersRef.current.forEach(clearTimeout);
+      timersRef.current = [];
     };
   }, [load]);
 
