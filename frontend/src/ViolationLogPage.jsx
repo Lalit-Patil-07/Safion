@@ -29,6 +29,7 @@ const ViolationLogPage = ({ onModalImage }) => {
 
   const firstLoad = useRef(true);
   const prevIdsRef = useRef(new Set());
+  const timersRef = useRef([]);
   const [newIds, setNewIds] = useState(new Set());
 
   const load = useCallback(() => {
@@ -42,13 +43,14 @@ const ViolationLogPage = ({ onModalImage }) => {
         const added = new Set([...currentIds].filter(id => !prevIds.has(id)));
         if (added.size > 0) {
           setNewIds(prev => new Set([...prev, ...added]));
-          setTimeout(() => {
+          const t = setTimeout(() => {
             setNewIds(prev => {
               const updated = new Set(prev);
               added.forEach(id => updated.delete(id));
               return updated;
             });
           }, 8000);
+          timersRef.current.push(t);
         }
         prevIdsRef.current = currentIds;
       })
@@ -62,7 +64,10 @@ const ViolationLogPage = ({ onModalImage }) => {
   useEffect(() => {
     load();
     const intervalId = setInterval(load, 5000);
-    return () => clearInterval(intervalId);
+    return () => {
+      clearInterval(intervalId);
+      timersRef.current.forEach(clearTimeout);
+    };
   }, [load]);
 
   const clear = async () => {
