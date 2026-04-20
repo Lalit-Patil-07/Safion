@@ -241,23 +241,59 @@ class InsightFacePipeline:
         self._temporal_boost         = config["TEMPORAL_BOOST"]
         self._recent_window          = config["RECENT_WINDOW"]
         self._strong_match_threshold = config["STRONG_MATCH_THRESHOLD"]
+        self._prefer_gpu             = config["PREFER_GPU"]
         self._rw              = _RWLock()
         self._cache: dict     = {}
         self._ready           = False
 
     # ── Init ──────────────────────────────────────────────────────────────────
+    @staticmethod
+    def _select_providers(prefer_gpu: bool) -> list[str]:
+        """
+        Detect available ONNXRuntime providers at runtime and return
+        the provider list to pass to FaceAnalysis.
+        Never silently falls back — always logs the chosen provider.
+        """
+        try:
+            import onnxruntime as ort
+            available = ort.get_available_providers()
+        except Exception:
+            available = ["CPUExecutionProvider"]
+
+        if prefer_gpu:
+            if "CUDAExecutionProvider" in available:
+                logger.info("InsightFace provider: CUDAExecutionProvider (GPU)")
+                return ["CUDAExecutionProvider", "CPUExecutionProvider"]
+            logger.warning(
+                "PREFER_GPU=true but CUDAExecutionProvider is not available "
+                "(onnxruntime-gpu not installed or CUDA not detected). "
+                "Falling back to CPUExecutionProvider."
+            )
+
+        logger.info("InsightFace provider: CPUExecutionProvider")
+        return ["CPUExecutionProvider"]
+
     def init_app(self, app) -> None:
         global _insight_app
         try:
             from insightface.app import FaceAnalysis
+            providers = self._select_providers(self._prefer_gpu)
+            # Sanity check: log installed ONNXRuntime variant and available providers
+            try:
+                import onnxruntime as _ort
+                logger.info("ONNXRuntime %s — available providers: %s",
+                            _ort.__version__, _ort.get_available_providers())
+            except ImportError:
+                logger.warning("ONNXRuntime not importable — InsightFace may fail.")
             with _insight_lock:
                 if _insight_app is None:
                     logger.info("Loading InsightFace '%s' …", self._model_name)
                     _insight_app = FaceAnalysis(
                         name=self._model_name,
-                        providers=["CPUExecutionProvider"],
+                        providers=providers,
                     )
-                    _insight_app.prepare(ctx_id=-1, det_size=(640, 640))
+                    ctx_id = 0 if self._prefer_gpu and "CUDAExecutionProvider" in providers else -1
+                    _insight_app.prepare(ctx_id=ctx_id, det_size=(640, 640))
                     logger.info("InsightFace loaded.")
             self._ready = True
         except Exception as exc:
