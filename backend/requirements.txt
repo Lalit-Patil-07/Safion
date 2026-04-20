@@ -12,7 +12,18 @@ opencv-python-headless>=4.9.0
 
 # Face recognition — InsightFace (buffalo_l: RetinaFace + ArcFace)
 insightface>=0.7.3
-onnxruntime>=1.17.0      # CPU inference backend for InsightFace
+
+# ── ONNXRuntime — install ONLY ONE of the two lines below ────────────────────
+# Installing both onnxruntime and onnxruntime-gpu in the same environment
+# causes provider detection to silently break. Uninstall one before installing
+# the other (see README — "ONNXRuntime Setup (CPU vs GPU)").
+#
+# CPU (default — works everywhere, no CUDA required):
+onnxruntime>=1.17.0
+#
+# GPU (CUDA — comment the line above and uncomment this one):
+# onnxruntime-gpu>=1.17.0
+# ─────────────────────────────────────────────────────────────────────────────
 
 # Clustering
 scikit-learn>=1.4.0
@@ -20,9 +31,10 @@ scikit-learn>=1.4.0
 # Numerics
 numpy>=1.26.0
 
-# Database — PostgreSQL driver + pgvector
+# Database — PostgreSQL driver
+# pgvector is NOT installed via pip — it is a PostgreSQL system extension.
+# See scripts/install_postgres.sh for system-level installation.
 psycopg2-binary>=2.9.0
-pgvector>=0.2.0
 
 # WSGI server (production)
 gunicorn>=21.2.0
