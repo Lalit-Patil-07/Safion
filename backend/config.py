@@ -56,6 +56,7 @@ class Config:
 
     # ── InsightFace ───────────────────────────────────────────────────────────
     INSIGHTFACE_MODEL: str          = _require("INSIGHTFACE_MODEL")
+    PREFER_GPU: bool                = _require("PREFER_GPU").lower() == "true"
     IDENTITY_MATCH_THRESHOLD: float = float(_require("IDENTITY_MATCH_THRESHOLD"))
     EMBEDDING_QUALITY_MIN: float    = float(_require("EMBEDDING_QUALITY_MIN"))
 
