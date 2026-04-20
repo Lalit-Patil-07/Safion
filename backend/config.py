@@ -88,6 +88,7 @@ class Config:
     STREAM_JPEG_QUALITY: int         = int(_require("STREAM_JPEG_QUALITY"))
     MAX_CONCURRENT_STREAMS: int      = int(_require("MAX_CONCURRENT_STREAMS"))
     FRAME_RATE_LIMIT: int            = int(_require("FRAME_RATE_LIMIT"))
+    FACE_EMBED_EVERY_N_FRAMES: int   = int(_require("FACE_EMBED_EVERY_N_FRAMES"))
 
     # ── Task Queue ────────────────────────────────────────────────────────────
     TASK_WORKER_THREADS: int = int(_require("TASK_WORKER_THREADS"))
