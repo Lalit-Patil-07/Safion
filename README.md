@@ -27,7 +27,7 @@ Safion is a real-time Personal Protective Equipment (PPE) detection system desig
 
 **Prerequisites:** Docker with NVIDIA Container Toolkit installed.
 
-> Docker deployment uses a pgvector-enabled PostgreSQL container (`pgvector/pgvector:pg18`).
+> Docker deployment uses a pgvector-enabled PostgreSQL container (`pgvector/pgvector:pg16`).
 > No manual PostgreSQL or pgvector installation is required.
 
 ```bash
@@ -120,8 +120,44 @@ pip install torch torchvision torchaudio --index-url https://download.pytorch.or
 
 pip install -r backend/requirements.txt
 ```
-
 ---
+
+#### ONNXRuntime Setup (CPU vs GPU)
+
+InsightFace uses ONNXRuntime for inference. The CPU and GPU builds are separate packages and **must never both be installed** — doing so causes provider detection to silently return CPU-only even when CUDA is available.
+
+**Default (CPU):** `requirements.txt` ships with `onnxruntime` active. No changes needed for CPU-only machines.
+
+**To switch to GPU:**
+
+1. Open `backend/requirements.txt` and swap the active line:
+   ```
+   # comment this out:
+   onnxruntime>=1.17.0
+
+   # uncomment this:
+   onnxruntime-gpu>=1.17.0
+   ```
+
+2. Reinstall cleanly (the uninstall step is required — pip will not remove the old package automatically):
+   ```bash
+   pip uninstall -y onnxruntime onnxruntime-gpu
+   pip install -r backend/requirements.txt
+   ```
+
+3. Verify GPU provider is available:
+   ```bash
+   python -c "import onnxruntime; print(onnxruntime.get_available_providers())"
+   # Expected: ['CUDAExecutionProvider', 'CPUExecutionProvider', ...]
+   ```
+   Or check that the app startup log contains:
+   ```
+   ONNXRuntime X.Y.Z — available providers: ['CUDAExecutionProvider', ...]
+   InsightFace provider: CUDAExecutionProvider (GPU)
+   ```
+
+Also ensure `PREFER_GPU=true` is set in your `.env`.
+
 
 #### 5. Install frontend dependencies
 
