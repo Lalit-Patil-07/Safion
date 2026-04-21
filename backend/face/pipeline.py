@@ -276,15 +276,30 @@ class InsightFacePipeline:
     def init_app(self, app) -> None:
         global _insight_app
         try:
+            # Preload CUDA DLLs via PyTorch before importing ONNXRuntime.
+            # PyTorch ships libcublas.so.12 / libcublasLt.so.12 bundled in its
+            # wheel (cu124 build).  onnxruntime-gpu (built against CUDA 12) needs
+            # those libraries at import time.  On CUDA 13 systems the system-level
+            # libs are .so.13, not .so.12 — importing torch first makes the CUDA
+            # 12 DLLs visible before ONNXRuntime searches for them.
+            try:
+                import torch  # noqa: F401  — side-effect: preloads CUDA DLLs
+                logger.info("torch %s preloaded (CUDA available: %s)",
+                            torch.__version__, torch.cuda.is_available())
+            except ImportError:
+                logger.warning("torch not installed — CUDA DLL preloading skipped.")
+
             from insightface.app import FaceAnalysis
             providers = self._select_providers(self._prefer_gpu)
-            # Sanity check: log installed ONNXRuntime variant and available providers
+
+            # Log ONNXRuntime version and all available providers
             try:
                 import onnxruntime as _ort
                 logger.info("ONNXRuntime %s — available providers: %s",
                             _ort.__version__, _ort.get_available_providers())
             except ImportError:
                 logger.warning("ONNXRuntime not importable — InsightFace may fail.")
+
             with _insight_lock:
                 if _insight_app is None:
                     logger.info("Loading InsightFace '%s' …", self._model_name)
@@ -294,7 +309,21 @@ class InsightFacePipeline:
                     )
                     ctx_id = 0 if self._prefer_gpu and "CUDAExecutionProvider" in providers else -1
                     _insight_app.prepare(ctx_id=ctx_id, det_size=(640, 640))
-                    logger.info("InsightFace loaded.")
+
+                    # Validate that the session actually loaded with the expected provider.
+                    # InsightFace can silently fall back to CPU even when GPU was requested.
+                    # get_providers() returns the providers active in this session.
+                    active = _insight_app.models[list(_insight_app.models.keys())[0]].session.get_providers()
+                    logger.info("InsightFace loaded — active session providers: %s", active)
+                    if self._prefer_gpu and "CUDAExecutionProvider" not in active:
+                        logger.error(
+                            "PREFER_GPU=true but InsightFace session is using %s, not GPU. "
+                            "Likely cause: onnxruntime-gpu not installed, or CUDA DLL mismatch "
+                            "(libcublasLt.so.12 not found). "
+                            "Install torch with cu124 index URL and onnxruntime-gpu>=1.24.0 — "
+                            "see README ONNXRuntime Setup section.",
+                            active,
+                        )
             self._ready = True
         except Exception as exc:
             logger.error("InsightFace load failed: %s", exc)
