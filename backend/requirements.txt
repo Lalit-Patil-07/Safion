@@ -4,6 +4,25 @@ flask-sqlalchemy>=3.1.0
 flask-bcrypt>=1.0.1
 flask-jwt-extended>=4.6.0
 
+# ── PyTorch (CUDA 12.8) ───────────────────────────────────────────────────────
+# Required by YOLO (ultralytics). Also preloads libcublas.so.12 / libcublasLt.so.12
+# before ONNXRuntime initialises, which is how onnxruntime-gpu finds its CUDA
+# libraries without a separate system-level CUDA toolkit install.
+#
+# Both torch and onnxruntime-gpu MUST target the same CUDA major version (12.x).
+# Mixing CUDA versions (e.g. torch cu128 + ort built for cu11) causes
+# "libcublasLt.so.12 not found" at runtime.
+#
+# Install with the CUDA 12.8 index URL:
+#   pip install -r backend/requirements.txt --index-url https://download.pytorch.org/whl/cu128
+#
+# CPU-only (no GPU):
+#   pip install -r backend/requirements.txt
+#
+torch>=2.7.0
+torchvision>=0.22.0
+torchaudio>=2.7.0
+
 # YOLO
 ultralytics>=8.0.0
 
@@ -14,15 +33,15 @@ opencv-python-headless>=4.9.0
 insightface>=0.7.3
 
 # ── ONNXRuntime — install ONLY ONE of the two lines below ────────────────────
-# Installing both onnxruntime and onnxruntime-gpu in the same environment
-# causes provider detection to silently break. Uninstall one before installing
-# the other (see README — "ONNXRuntime Setup (CPU vs GPU)").
+# Both packages register under the `onnxruntime` module name. Having both
+# installed simultaneously breaks CUDAExecutionProvider detection silently.
+# Uninstall one before switching: pip uninstall -y onnxruntime onnxruntime-gpu
 #
-# CPU (default — works everywhere, no CUDA required):
-onnxruntime>=1.17.0
+# CPU (default — works everywhere):
+onnxruntime>=1.24.0
 #
-# GPU (CUDA — comment the line above and uncomment this one):
-# onnxruntime-gpu>=1.17.0
+# GPU (CUDA 12.8 — comment the line above and uncomment this one):
+# onnxruntime-gpu>=1.24.0
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Clustering
