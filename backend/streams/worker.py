@@ -45,6 +45,7 @@ import numpy as np
 
 from detection.association import split_detections, check_association
 from streams.tracker import FaceTracker
+from tasks.queue import ViolationJob
 
 logger = logging.getLogger(__name__)
 
@@ -284,7 +285,6 @@ class StreamWorker:
             for viol in associated:
                 logger.debug("[stream=%s] track=%d -> violation '%s' identity=%s",
                              sid8, track.track_id, viol["class_name"], track.identity_id)
-                from tasks.queue import ViolationJob
                 self.task_queue.put(ViolationJob(
                     stream_id       = self.stream_id,
                     violation_type  = viol["class_name"],
