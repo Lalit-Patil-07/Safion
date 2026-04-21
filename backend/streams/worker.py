@@ -174,7 +174,12 @@ class StreamWorker:
         # second.  Lower values reduce CPU encode time across many streams.
         # Encode is skipped on intermediate frames; stats still update every frame.
         output_fps = cfg["STREAM_OUTPUT_FPS"]
-        self.encode_every_n = max(1, round(cfg["FRAME_RATE_LIMIT"] / output_fps))
+        # FIX: guard against STREAM_OUTPUT_FPS=0 or values exceeding FRAME_RATE_LIMIT,
+        #      both of which would cause ZeroDivisionError or encode on every frame.
+        _fps_limit = cfg["FRAME_RATE_LIMIT"]
+        if output_fps <= 0 or output_fps > _fps_limit:
+            output_fps = _fps_limit   # encode every frame as safe fallback
+        self.encode_every_n = max(1, round(_fps_limit / output_fps))
 
         self._fps_deque:  deque = deque(maxlen=30)
         self._frame_count: int  = 0
@@ -238,10 +243,15 @@ class StreamWorker:
 
         # Scale bboxes from inference resolution back to original resolution.
         # Crops for InsightFace and annotation always use the original frame.
+        # FIX: cast to int immediately so downstream code (map(int, bbox),
+        #      check_association) never receives float coordinates.
         if scale_x != 1.0 or scale_y != 1.0:
             for det in detections:
                 x1, y1, x2, y2 = det["bbox"]
-                det["bbox"] = [x1 * scale_x, y1 * scale_y, x2 * scale_x, y2 * scale_y]
+                det["bbox"] = [
+                    int(x1 * scale_x), int(y1 * scale_y),
+                    int(x2 * scale_x), int(y2 * scale_y),
+                ]
 
         persons, violations = split_detections(detections)
 
@@ -274,16 +284,19 @@ class StreamWorker:
             #   c) skip all other frames — this is the key FPS improvement
             run_face = has_violation or (fc % self.face_every_n == 0)
 
+            # FIX: initialise faces before the conditional so the debug log
+            #      below is safe even when run_face is False.
+            faces: list = []
             if run_face:
                 with self.app.app_context():
                     faces = self.pipeline.embed_crop(crop)
                 if faces:
                     best = max(faces, key=lambda f: f["quality_score"])
                     track.add_embedding(best["embedding"], best["quality_score"])
-                if fc % 30 == 0:
-                    logger.debug("[stream=%s] track=%d frames=%d embs=%d faces=%d",
-                                 sid8, track.track_id,
-                                 track.frames_seen, track.n_embeddings, len(faces))
+            if run_face and fc % 30 == 0:
+                logger.debug("[stream=%s] track=%d frames=%d embs=%d faces=%d",
+                             sid8, track.track_id,
+                             track.frames_seen, track.n_embeddings, len(faces))
 
             # Identity assignment — deferred until track is confirmed
             if self.tracker.is_confirmed(track) and track.identity_id is None:
