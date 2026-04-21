@@ -14,7 +14,7 @@ flask-jwt-extended>=4.6.0
 # "libcublasLt.so.12 not found" at runtime.
 #
 # Install with the CUDA 12.8 index URL:
-#   pip install -r backend/requirements.txt --index-url https://download.pytorch.org/whl/cu128
+#   pip install -r backend/requirements.txt --extra-index-url https://download.pytorch.org/whl/cu128
 #
 # CPU-only (no GPU):
 #   pip install -r backend/requirements.txt
@@ -38,10 +38,10 @@ insightface>=0.7.3
 # Uninstall one before switching: pip uninstall -y onnxruntime onnxruntime-gpu
 #
 # CPU (default — works everywhere):
-onnxruntime>=1.24.0
+# onnxruntime>=1.24.0
 #
 # GPU (CUDA 12.8 — comment the line above and uncomment this one):
-# onnxruntime-gpu>=1.24.0
+onnxruntime-gpu>=1.24.0
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Clustering
@@ -54,6 +54,7 @@ numpy>=1.26.0
 # pgvector is NOT installed via pip — it is a PostgreSQL system extension.
 # See scripts/install_postgres.sh for system-level installation.
 psycopg2-binary>=2.9.0
+pgvector>=0.2.0
 
 # WSGI server (production)
 gunicorn>=21.2.0
