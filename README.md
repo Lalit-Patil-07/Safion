@@ -59,7 +59,7 @@ Open `http://localhost:5000`.
 | Node.js | 18+ |
 | PostgreSQL | **18 exactly** |
 | pgvector | system extension (see step 1 — **not a pip package**) |
-| NVIDIA CUDA Toolkit | 12.4+ (CUDA 13 requires compatibility workaround — see below) |
+| NVIDIA CUDA Toolkit | **12.8** (must match torch and onnxruntime-gpu) |
 
 ---
 
@@ -111,6 +111,8 @@ PGPASSWORD=your_postgres_password bash scripts/setup_db.sh
 
 #### 4. Install Python dependencies
 
+`torch` is declared in `backend/requirements.txt` — no separate install step is needed.
+
 **CPU-only:**
 ```bash
 python -m venv venv
@@ -118,40 +120,32 @@ source venv/bin/activate
 pip install -r backend/requirements.txt
 ```
 
-**GPU (CUDA 12.4 / CUDA 13):**
+**GPU (CUDA 12.8):**
 ```bash
 python -m venv venv
 source venv/bin/activate
-pip install -r backend/requirements.txt --index-url https://download.pytorch.org/whl/cu124
+pip install -r backend/requirements.txt --index-url https://download.pytorch.org/whl/cu128
 ```
 
-> `torch` is declared in `requirements.txt` — no separate install step is needed.
-> The `--index-url` flag makes pip resolve `torch`, `torchvision`, and `torchaudio`
-> from the cu124 wheel index while installing all other packages from PyPI normally.
+> The `--index-url` flag resolves `torch`, `torchvision`, and `torchaudio` from the
+> cu128 wheel index. All other packages are fetched from PyPI as normal.
 ---
 
 #### ONNXRuntime Setup (CPU vs GPU)
 
-> ⚠️ **Mismatched CUDA versions will cause silent CPU fallback** — no error, just no GPU.
+> ⚠️ **`torch` and `onnxruntime-gpu` must both target the same CUDA major version.**
+> A mismatch (e.g. torch cu128 + ort built for cu11) causes `libcublasLt.so.12 not found`
+> and silent fallback to CPU with no error message.
 
-**Compatibility matrix:**
+**This project targets CUDA 12.8.** Both torch (cu128) and onnxruntime-gpu (CUDA 12.x build
+from PyPI) are aligned to CUDA 12. Install CUDA 12.8 from the
+[NVIDIA CUDA Archive](https://developer.nvidia.com/cuda-12-8-0-download-archive) before
+setting up the GPU environment.
 
-| System CUDA | `torch` wheel | `onnxruntime-gpu` | Works? |
-|---|---|---|---|
-| 12.x | cu124 | `>=1.24.0` (PyPI) | ✅ |
-| 13.x | cu124 | `>=1.24.0` (PyPI) | ✅ via PyTorch DLL preload |
-| 13.x | cu124 | `<1.24.0` | ❌ missing `libcublasLt.so.12` |
-| 13.x | cu130 | `>=1.24.0` (PyPI) | ❌ DLL version mismatch |
+The CPU and GPU `onnxruntime` builds install under the same module name. **Never install
+both** in the same environment — uninstall one before switching.
 
-**Why CUDA 13 works with CUDA 12 packages:** PyTorch cu124 bundles `libcublasLt.so.12` inside
-its wheel. The app imports `torch` before ONNXRuntime, which preloads those CUDA 12 DLLs into
-the process. ONNXRuntime then finds them without needing a system-level CUDA 12 install.
-NVIDIA drivers guarantee forward compatibility for CUDA 12 binaries running on CUDA 13 hardware.
-
-The CPU and GPU `onnxruntime` builds install under the same package name and **must never both
-be installed** in the same environment.
-
-**Default (CPU):** `requirements.txt` ships with `onnxruntime` active. No changes needed.
+**Default (CPU):** `backend/requirements.txt` ships with `onnxruntime` (CPU) active.
 
 **To switch to GPU:**
 
@@ -164,24 +158,21 @@ be installed** in the same environment.
    onnxruntime-gpu>=1.24.0
    ```
 
-2. Reinstall cleanly (the uninstall step is required):
+2. Reinstall cleanly:
    ```bash
    pip uninstall -y onnxruntime onnxruntime-gpu
-   pip install -r backend/requirements.txt --index-url https://download.pytorch.org/whl/cu124
+   pip install -r backend/requirements.txt --index-url https://download.pytorch.org/whl/cu128
    ```
 
-3. Verify the session is actually using GPU (not just that the provider is *available*):
+3. Verify GPU is active:
    ```bash
    python -c "import torch; import onnxruntime; print(onnxruntime.get_available_providers())"
    # Expected: ['CUDAExecutionProvider', 'CPUExecutionProvider']
-   # Note: import torch FIRST — this preloads the CUDA DLLs
    ```
    Or check the app startup log for:
    ```
    InsightFace loaded — active session providers: ['CUDAExecutionProvider']
    ```
-   If instead you see an ERROR log mentioning `libcublasLt.so.12`, `onnxruntime-gpu`
-   predates DLL preloading support — ensure version `>=1.24.0` is installed.
 
 Also ensure `PREFER_GPU=true` is set in your `.env`.
 
