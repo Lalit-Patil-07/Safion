@@ -165,6 +165,17 @@ class StreamWorker:
             min_embeddings = cfg["TRACK_MIN_EMBEDDINGS"],
         )
 
+        # PROCESS_WIDTH: resize frame to this width before YOLO inference.
+        # Smaller = faster GPU inference, same detection quality at 640.
+        # 0 = disabled (use full resolution).
+        self.process_width = cfg["PROCESS_WIDTH"]
+
+        # STREAM_OUTPUT_FPS: how many annotated JPEG frames to publish per
+        # second.  Lower values reduce CPU encode time across many streams.
+        # Encode is skipped on intermediate frames; stats still update every frame.
+        output_fps = cfg["STREAM_OUTPUT_FPS"]
+        self.encode_every_n = max(1, round(cfg["FRAME_RATE_LIMIT"] / output_fps))
+
         self._fps_deque:  deque = deque(maxlen=30)
         self._frame_count: int  = 0
 
@@ -209,9 +220,28 @@ class StreamWorker:
         fc   = self._frame_count
         sid8 = self.stream_id[:8]
 
-        # ── YOLO ──────────────────────────────────────────────────────────────
+        # ── YOLO (optionally on a downscaled frame) ───────────────────────────
+        orig_h, orig_w = frame.shape[:2]
+        if self.process_width > 0 and orig_w > self.process_width:
+            scale = self.process_width / orig_w
+            infer_frame = cv2.resize(
+                frame, (self.process_width, int(orig_h * scale)),
+                interpolation=cv2.INTER_LINEAR,
+            )
+            scale_x, scale_y = orig_w / infer_frame.shape[1], orig_h / infer_frame.shape[0]
+        else:
+            infer_frame = frame
+            scale_x = scale_y = 1.0
+
         with self.app.app_context():
-            detections = self.yolo.inference(frame)
+            detections = self.yolo.inference(infer_frame)
+
+        # Scale bboxes from inference resolution back to original resolution.
+        # Crops for InsightFace and annotation always use the original frame.
+        if scale_x != 1.0 or scale_y != 1.0:
+            for det in detections:
+                x1, y1, x2, y2 = det["bbox"]
+                det["bbox"] = [x1 * scale_x, y1 * scale_y, x2 * scale_x, y2 * scale_y]
 
         persons, violations = split_detections(detections)
 
@@ -297,30 +327,35 @@ class StreamWorker:
 
         self.tracker.mark_missing(active_bboxes)
 
-        # ── Encode + publish ──────────────────────────────────────────────────
-        _annotate(frame, detections)
-        ret, buf = cv2.imencode(
-            ".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), self.jpeg_quality]
-        )
-        if not ret:
-            return
-
         self._frame_count += 1
+
+        # ── Encode + publish (throttled to STREAM_OUTPUT_FPS) ─────────────────
+        # Annotation and JPEG encode are CPU-heavy. Skipping them on intermediate
+        # frames keeps detection running at full rate while reducing CPU load.
+        # Stats (fps, violation_count) update every frame regardless.
+        encode_this_frame = (self._frame_count % self.encode_every_n == 0)
 
         with self.store_lock:
             if self.stream_id in self.stream_store:
-                self.stream_store[self.stream_id]["frame"] = buf.tobytes()
-                self.stream_store[self.stream_id]["stats"].update({
-                    "fps": round(
-                        sum(self._fps_deque) / max(len(self._fps_deque), 1), 1
-                    ),
-                    "frame_count":     self._frame_count,
-                    "violation_count": self.stream_store[self.stream_id]["stats"].get(
-                        "violation_count", 0
-                    ) + (1 if any(not d["safe"] for d in detections) else 0),
-                    "last_detections": detections,
-                    "resolution":      [frame.shape[1], frame.shape[0]],
-                })
+                stats = self.stream_store[self.stream_id]["stats"]
+                stats["fps"]         = round(
+                    sum(self._fps_deque) / max(len(self._fps_deque), 1), 1
+                )
+                stats["frame_count"] = self._frame_count
+                stats["violation_count"] = stats.get("violation_count", 0) + (
+                    1 if any(not d["safe"] for d in detections) else 0
+                )
+                stats["last_detections"] = detections
+                stats["resolution"]      = [orig_w, orig_h]
+
+                if encode_this_frame:
+                    _annotate(frame, detections)
+                    ret, buf = cv2.imencode(
+                        ".jpg", frame,
+                        [int(cv2.IMWRITE_JPEG_QUALITY), self.jpeg_quality],
+                    )
+                    if ret:
+                        self.stream_store[self.stream_id]["frame"] = buf.tobytes()
 
 
 # ── Entry point (StreamManager interface — unchanged) ─────────────────────────
