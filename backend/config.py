@@ -89,6 +89,8 @@ class Config:
     MAX_CONCURRENT_STREAMS: int      = int(_require("MAX_CONCURRENT_STREAMS"))
     FRAME_RATE_LIMIT: int            = int(_require("FRAME_RATE_LIMIT"))
     FACE_EMBED_EVERY_N_FRAMES: int   = int(_require("FACE_EMBED_EVERY_N_FRAMES"))
+    IDENTITY_RECHECK_SECONDS: float = float(_require("IDENTITY_RECHECK_SECONDS"))
+    MAX_PENDING_EMBEDDINGS: int     = int(_require("MAX_PENDING_EMBEDDINGS"))
     PROCESS_WIDTH: int               = int(_require("PROCESS_WIDTH"))
     STREAM_OUTPUT_FPS: int           = int(_require("STREAM_OUTPUT_FPS"))
 

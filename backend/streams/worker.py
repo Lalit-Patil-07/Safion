@@ -156,7 +156,9 @@ class StreamWorker:
         self.jpeg_quality = cfg["STREAM_JPEG_QUALITY"]
         self.violation_cd = cfg["VIOLATION_COOLDOWN_SECONDS"]
         self.fps_limit    = cfg["FRAME_RATE_LIMIT"]
-        self.face_every_n = cfg["FACE_EMBED_EVERY_N_FRAMES"]
+        self.face_every_n            = cfg["FACE_EMBED_EVERY_N_FRAMES"]
+        self.identity_recheck_secs   = cfg["IDENTITY_RECHECK_SECONDS"]
+        self.max_pending_embeddings  = cfg["MAX_PENDING_EMBEDDINGS"]
 
         self.tracker = FaceTracker(
             iou_threshold  = cfg["TRACK_IOU_THRESHOLD"],
@@ -278,21 +280,63 @@ class StreamWorker:
             associated = [v for v in violations if check_association(bbox, v["bbox"])]
             has_violation = bool(associated)
 
-            # Face embedding decision:
-            #   a) run immediately when violation present (need identity for logging), OR
-            #   b) periodic refresh to accumulate embeddings for future matching
-            #   c) skip all other frames — this is the key FPS improvement
-            run_face = has_violation or (fc % self.face_every_n == 0)
+            # ── Face embedding decision (Stage 3 optimisation) ───────────────
+            # run_face is True when ANY of:
+            #   a) violation present — always embed for immediate identity resolution
+            #   b) track has no identity yet — keep accumulating embeddings
+            #   c) identity assigned AND cooldown expired AND periodic frame hit
+            now_mono = time.monotonic()
+            identity_assigned   = track.identity_id is not None
+            cooldown_expired    = (now_mono - track.last_identity_check) > self.identity_recheck_secs
+            periodic_frame      = (fc % self.face_every_n == 0)
 
-            # FIX: initialise faces before the conditional so the debug log
-            #      below is safe even when run_face is False.
+            if identity_assigned and not cooldown_expired and not has_violation:
+                # Cooldown active — skip face embedding for this track.
+                logger.debug("[stream=%s] track=%d identity cooldown active (%.1fs remaining)",
+                             sid8, track.track_id,
+                             self.identity_recheck_secs - (now_mono - track.last_identity_check))
+                run_face = False
+            else:
+                run_face = has_violation or (not identity_assigned) or (cooldown_expired and periodic_frame)
+
             faces: list = []
             if run_face:
                 with self.app.app_context():
                     faces = self.pipeline.embed_crop(crop)
                 if faces:
                     best = max(faces, key=lambda f: f["quality_score"])
-                    track.add_embedding(best["embedding"], best["quality_score"])
+
+                    # ── Quality gate ─────────────────────────────────────────
+                    # Only add embedding if quality is high enough relative to
+                    # what the track already has.  This prevents blurry frames
+                    # from polluting the pending pool used for identity matching.
+                    avg_quality = (
+                        sum(track.pending_quality) / len(track.pending_quality)
+                        if track.pending_quality else 0.0
+                    )
+                    few_embeddings = track.n_embeddings < 3
+                    quality_ok     = best["quality_score"] > avg_quality or few_embeddings
+
+                    if quality_ok:
+                        # ── Embedding cap ─────────────────────────────────────
+                        # Discard oldest if at cap to bound memory and keep the
+                        # pool representative of recent appearance.
+                        if len(track.pending_embeddings) >= self.max_pending_embeddings:
+                            track.pending_embeddings.pop(0)
+                            track.pending_quality.pop(0)
+                        track.add_embedding(best["embedding"], best["quality_score"])
+                    else:
+                        logger.debug(
+                            "[stream=%s] track=%d embedding skipped — quality %.3f <= avg %.3f",
+                            sid8, track.track_id, best["quality_score"], avg_quality,
+                        )
+
+                    # Mark when we last ran a face check for this track.
+                    track.last_identity_check = now_mono
+                    if cooldown_expired and identity_assigned:
+                        logger.debug("[stream=%s] track=%d identity recheck triggered",
+                                     sid8, track.track_id)
+
             if run_face and fc % 30 == 0:
                 logger.debug("[stream=%s] track=%d frames=%d embs=%d faces=%d",
                              sid8, track.track_id,
