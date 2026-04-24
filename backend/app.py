@@ -167,6 +167,7 @@ def _register_error_handlers(app):
 
 def _init_services(app):
     from detection.yolo_service import YOLOService
+    from detection.batcher import YOLOBatcher
     from face.pipeline import InsightFacePipeline
     from tasks.queue import TaskQueue
     from streams.manager import StreamManager
@@ -174,6 +175,10 @@ def _init_services(app):
     yolo = YOLOService()
     yolo.init_app(app)
     app.extensions["yolo_service"] = yolo
+
+    batcher = YOLOBatcher()
+    batcher.init_app(app)
+    app.extensions["yolo_batcher"] = batcher
 
     pipeline = InsightFacePipeline(app.config)
     pipeline.init_app(app)
@@ -190,4 +195,4 @@ def _init_services(app):
     app.extensions["stream_manager"] = stream_manager
 
     import atexit
-    atexit.register(lambda: (stream_manager.stop_all(), task_queue.shutdown()))
+    atexit.register(lambda: (stream_manager.stop_all(), task_queue.shutdown(), batcher.shutdown()))

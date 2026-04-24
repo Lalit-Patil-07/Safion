@@ -150,7 +150,7 @@ class StreamWorker:
         self.store_lock   = store_lock
 
         cfg = app.config
-        self.yolo         = app.extensions["yolo_service"]
+        self.batcher      = app.extensions["yolo_batcher"]
         self.task_queue   = app.extensions["task_queue"]
         self.pipeline     = app.extensions["face_pipeline"]
         self.jpeg_quality = cfg["STREAM_JPEG_QUALITY"]
@@ -240,8 +240,7 @@ class StreamWorker:
             infer_frame = frame
             scale_x = scale_y = 1.0
 
-        with self.app.app_context():
-            detections = self.yolo.inference(infer_frame)
+        detections = self.batcher.submit(infer_frame)
 
         # Scale bboxes from inference resolution back to original resolution.
         # Crops for InsightFace and annotation always use the original frame.

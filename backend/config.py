@@ -53,6 +53,8 @@ class Config:
     MODEL_PATH: str             = os.environ.get("MODEL_PATH", os.path.join(BASE_DIR, "..", "best.pt"))
     CONFIDENCE_THRESHOLD: float = float(_require("CONFIDENCE_THRESHOLD"))
     YOLO_DEVICE: str            = _require("YOLO_DEVICE")
+    YOLO_BATCH_SIZE: int        = int(os.environ.get("YOLO_BATCH_SIZE", "4"))
+    YOLO_BATCH_TIMEOUT_MS: int  = int(os.environ.get("YOLO_BATCH_TIMEOUT_MS", "20"))
 
     # ── InsightFace ───────────────────────────────────────────────────────────
     INSIGHTFACE_MODEL: str          = _require("INSIGHTFACE_MODEL")

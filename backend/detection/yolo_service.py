@@ -119,3 +119,47 @@ class YOLOService:
             })
 
         return detections
+
+    def inference_batch(self, frames: list[np.ndarray]) -> list[list[dict]]:
+        """
+        Run YOLO on a batch of BGR frames in a single GPU call.
+
+        Parameters
+        ----------
+        frames : list of BGR numpy arrays, each (H, W, 3)
+
+        Returns
+        -------
+        List of detection lists, one per input frame.
+        Each detection dict is identical to the inference() return format.
+        """
+        if self._model is None or not frames:
+            return [[] for _ in frames]
+
+        with self._lock:
+            batch_results = self._model(
+                frames,
+                device=self._device,
+                conf=self._confidence,
+                verbose=False,
+            )
+
+        all_detections: list[list[dict]] = []
+        for result in batch_results:
+            detections: list[dict] = []
+            for det in result.boxes.data:
+                x1, y1, x2, y2, confidence, class_id = det.cpu().numpy()
+                cls_info = self._ppe_classes.get(int(class_id))
+                if cls_info is None:
+                    continue
+                detections.append({
+                    "class_id":   int(class_id),
+                    "class_name": cls_info["name"],
+                    "confidence": float(confidence),
+                    "bbox":       [float(x1), float(y1), float(x2), float(y2)],
+                    "color":      cls_info["color"],
+                    "safe":       cls_info["safe"],
+                })
+            all_detections.append(detections)
+
+        return all_detections
