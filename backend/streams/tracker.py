@@ -37,6 +37,7 @@ stream_worker), so no locking is needed.
 
 from __future__ import annotations
 
+import threading
 import time
 from typing import Optional
 
@@ -85,6 +86,13 @@ class Track:
         # — once an identity is assigned, face embedding is skipped until this
         # timestamp is older than the cooldown, reducing InsightFace load.
         self.last_identity_check: float = 0.0   # monotonic
+
+        # Guards all fields written by the face worker thread and read by the
+        # processing loop: pending_embeddings, pending_quality, mean_embedding,
+        # identity_id, identity_label, last_identity_check.
+        # Fields written only by the processing loop (frames_seen, frames_lost,
+        # bbox, last_violation_time) do NOT need this lock.
+        self.lock: threading.Lock = threading.Lock()
 
     def update(self, bbox: list[float]) -> None:
         self.bbox         = bbox

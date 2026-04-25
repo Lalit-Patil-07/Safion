@@ -113,6 +113,19 @@ class _ProcessedFrame:
     violation_delta: int     # 1 if any unsafe detection this frame, else 0
 
 
+@dataclass
+class _FaceJob:
+    """
+    Crop + context enqueued by the processing loop for the face worker.
+    Holds a live reference to the Track so the worker can write results back
+    directly under track.lock — no shared data structure needed.
+    """
+    track:         object      # Track; typed as object to avoid circular import
+    crop:          np.ndarray  # copy — processing loop must not reuse this buffer
+    has_violation: bool
+    frame_count:   int
+
+
 # ── Annotation helper ─────────────────────────────────────────────────────────
 
 def _annotate(frame: np.ndarray, detections: list[dict]) -> None:
@@ -177,11 +190,13 @@ class StreamWorker:
         self.max_pending_embeddings  = cfg["MAX_PENDING_EMBEDDINGS"]
 
         # ── Pipeline queues ───────────────────────────────────────────────────
-        # process_queue: VideoStream → _processing_loop  (raw frames)
-        # output_queue:  _processing_loop → _encoding_loop  (annotated results)
-        # Both are bounded; put_nowait drops frames rather than blocking a stage.
+        # process_queue : VideoStream      → _processing_loop   (raw frames)
+        # output_queue  : _processing_loop → _encoding_loop     (annotated results)
+        # face_queue    : _processing_loop → _face_worker_loop  (crops for embedding)
+        # All bounded; put_nowait/drop-oldest keeps each stage fully non-blocking.
         self.process_queue = queue.Queue(maxsize=cfg["PROCESS_QUEUE_SIZE"])
         self.output_queue  = queue.Queue(maxsize=cfg["OUTPUT_QUEUE_SIZE"])
+        self.face_queue    = queue.Queue(maxsize=cfg["FACE_QUEUE_SIZE"])
 
         self.tracker = FaceTracker(
             iou_threshold  = cfg["TRACK_IOU_THRESHOLD"],
@@ -228,12 +243,18 @@ class StreamWorker:
 
             logger.info("Stream %s started (%s).", self.stream_id, src)
 
-            # Encoding loop runs in its own daemon thread so JPEG encode never
-            # stalls the YOLO/face processing loop.
+            # Encoding loop: annotation + JPEG encode; never stalls YOLO.
             Thread(
                 target=self._encoding_loop,
                 daemon=True,
                 name=f"enc-{self.stream_id[:8]}",
+            ).start()
+
+            # Face worker: embed_crop + identity assignment; never stalls YOLO.
+            Thread(
+                target=self._face_worker_loop,
+                daemon=True,
+                name=f"face-{self.stream_id[:8]}",
             ).start()
 
             self._processing_loop()
@@ -305,18 +326,18 @@ class StreamWorker:
             associated = [v for v in violations if check_association(bbox, v["bbox"])]
             has_violation = bool(associated)
 
-            # ── Face embedding decision (Stage 3 optimisation) ───────────────
-            # run_face is True when ANY of:
-            #   a) violation present — always embed for immediate identity resolution
-            #   b) track has no identity yet — keep accumulating embeddings
-            #   c) identity assigned AND cooldown expired AND periodic frame hit
+            # ── Face job enqueue — non-blocking ──────────────────────────────
+            # Processing loop never calls embed_crop() directly.
+            # Cooldown / periodic checks preserve the Stage 3 semantics; the
+            # only change is that the work is handed off and we continue
+            # immediately rather than blocking on InsightFace.
             now_mono = time.monotonic()
-            identity_assigned   = track.identity_id is not None
-            cooldown_expired    = (now_mono - track.last_identity_check) > self.identity_recheck_secs
-            periodic_frame      = (fc % self.face_every_n == 0)
+            with track.lock:
+                identity_assigned = track.identity_id is not None
+                cooldown_expired  = (now_mono - track.last_identity_check) > self.identity_recheck_secs
+            periodic_frame = (fc % self.face_every_n == 0)
 
             if identity_assigned and not cooldown_expired and not has_violation:
-                # Cooldown active — skip face embedding for this track.
                 logger.debug("[stream=%s] track=%d identity cooldown active (%.1fs remaining)",
                              sid8, track.track_id,
                              self.identity_recheck_secs - (now_mono - track.last_identity_check))
@@ -324,64 +345,29 @@ class StreamWorker:
             else:
                 run_face = has_violation or (not identity_assigned) or (cooldown_expired and periodic_frame)
 
-            faces: list = []
-            if run_face:
-                with self.app.app_context():
-                    faces = self.pipeline.embed_crop(crop)
-                if faces:
-                    best = max(faces, key=lambda f: f["quality_score"])
+            if run_face and crop.size > 0:
+                face_job = _FaceJob(
+                    track         = track,
+                    crop          = crop.copy(),   # isolated copy — worker owns this buffer
+                    has_violation = has_violation,
+                    frame_count   = fc,
+                )
+                try:
+                    self.face_queue.put_nowait(face_job)
+                except queue.Full:
+                    # Drop oldest job; violation frames are more urgent than stale crops.
+                    try:
+                        self.face_queue.get_nowait()
+                    except queue.Empty:
+                        pass
+                    try:
+                        self.face_queue.put_nowait(face_job)
+                    except queue.Full:
+                        pass   # concurrent fill between the two put_nowait — skip
 
-                    # ── Quality gate ─────────────────────────────────────────
-                    # Only add embedding if quality is high enough relative to
-                    # what the track already has.  This prevents blurry frames
-                    # from polluting the pending pool used for identity matching.
-                    avg_quality = (
-                        sum(track.pending_quality) / len(track.pending_quality)
-                        if track.pending_quality else 0.0
-                    )
-                    few_embeddings = track.n_embeddings < 3
-                    quality_ok     = best["quality_score"] > avg_quality or few_embeddings
-
-                    if quality_ok:
-                        # ── Embedding cap ─────────────────────────────────────
-                        # Discard oldest if at cap to bound memory and keep the
-                        # pool representative of recent appearance.
-                        if len(track.pending_embeddings) >= self.max_pending_embeddings:
-                            track.pending_embeddings.pop(0)
-                            track.pending_quality.pop(0)
-                        track.add_embedding(best["embedding"], best["quality_score"])
-                    else:
-                        logger.debug(
-                            "[stream=%s] track=%d embedding skipped — quality %.3f <= avg %.3f",
-                            sid8, track.track_id, best["quality_score"], avg_quality,
-                        )
-
-                    # Mark when we last ran a face check for this track.
-                    track.last_identity_check = now_mono
-                    if cooldown_expired and identity_assigned:
-                        logger.debug("[stream=%s] track=%d identity recheck triggered",
-                                     sid8, track.track_id)
-
-            if run_face and fc % 30 == 0:
-                logger.debug("[stream=%s] track=%d frames=%d embs=%d faces=%d",
-                             sid8, track.track_id,
-                             track.frames_seen, track.n_embeddings, len(faces))
-
-            # Identity assignment — deferred until track is confirmed
-            if self.tracker.is_confirmed(track) and track.identity_id is None:
-                logger.debug("[stream=%s] track=%d confirmed — matching identity",
-                             sid8, track.track_id)
-                if track.pending_embeddings:
-                    with self.app.app_context():
-                        identity_id, label, score = self.pipeline.match_and_store_track(
-                            track.pending_embeddings,
-                            track.pending_quality,
-                            stream_id=self.stream_id,
-                        )
-                    track.identity_id    = identity_id
-                    track.identity_label = label
-                    logger.debug("[stream=%s] track=%d -> '%s' (score=%.3f)",
-                                 sid8, track.track_id, label, score)
+            if fc % 30 == 0:
+                logger.debug("[stream=%s] track=%d frames=%d",
+                             sid8, track.track_id, track.frames_seen)
 
             # Violation dispatch
             if track.frames_seen < self.tracker.min_frames:
@@ -394,17 +380,23 @@ class StreamWorker:
                 continue
             track.last_violation_time = now
 
+            # Read identity fields under lock — face worker may be writing them
+            # concurrently on a different thread.
+            with track.lock:
+                identity_id    = track.identity_id
+                identity_label = track.identity_label or "Unknown Person"
+
             for viol in associated:
                 logger.debug("[stream=%s] track=%d -> violation '%s' identity=%s",
-                             sid8, track.track_id, viol["class_name"], track.identity_id)
+                             sid8, track.track_id, viol["class_name"], identity_id)
                 self.task_queue.put(ViolationJob(
                     stream_id       = self.stream_id,
                     violation_type  = viol["class_name"],
                     confidence      = viol["confidence"],
                     person_crop_bgr = crop.copy(),
                     person_bbox     = bbox,
-                    identity_id     = track.identity_id,
-                    identity_label  = track.identity_label or "Unknown Person",
+                    identity_id     = identity_id,
+                    identity_label  = identity_label,
                 ))
 
         self.tracker.mark_missing(active_bboxes)
@@ -451,6 +443,117 @@ class StreamWorker:
                 self.output_queue.put_nowait(pf)
             except queue.Full:
                 pass   # encoding loop is behind — drop, never block
+
+    # ── Face worker loop ──────────────────────────────────────────────────────
+
+    def _face_worker_loop(self) -> None:
+        """
+        Dedicated daemon thread per stream.
+
+        Reads _FaceJob items from face_queue, runs embed_crop(), applies the
+        quality gate, updates track embeddings, and triggers identity assignment
+        when the track is confirmed.  All mutations to track fields shared with
+        the processing loop are performed under track.lock.
+
+        The DB call (match_and_store_track) is made OUTSIDE track.lock to avoid
+        holding the lock during I/O.  A double-check guard after re-acquiring
+        the lock prevents two workers from assigning identity to the same track
+        if jobs were queued rapidly (e.g. violation burst).
+        """
+        sid8 = self.stream_id[:8]
+
+        while not self.stop_event.is_set():
+            try:
+                job = self.face_queue.get(timeout=0.05)
+            except queue.Empty:
+                continue
+
+            # ── Embedding (blocking InsightFace call) ─────────────────────────
+            with self.app.app_context():
+                faces = self.pipeline.embed_crop(job.crop)
+
+            now_mono = time.monotonic()
+
+            if not faces:
+                # Record the attempt so the cooldown timer advances correctly.
+                with job.track.lock:
+                    job.track.last_identity_check = now_mono
+                continue
+
+            best = max(faces, key=lambda f: f["quality_score"])
+
+            # ── Quality gate + embedding update (under lock) ──────────────────
+            should_assign  = False
+            embs_copy:  list = []
+            quals_copy: list = []
+
+            with job.track.lock:
+                avg_quality = (
+                    sum(job.track.pending_quality) / len(job.track.pending_quality)
+                    if job.track.pending_quality else 0.0
+                )
+                few_embeddings = job.track.n_embeddings < 3
+                quality_ok     = best["quality_score"] > avg_quality or few_embeddings
+
+                if quality_ok:
+                    # Embedding cap — discard oldest to bound memory.
+                    if len(job.track.pending_embeddings) >= self.max_pending_embeddings:
+                        job.track.pending_embeddings.pop(0)
+                        job.track.pending_quality.pop(0)
+                    job.track.add_embedding(best["embedding"], best["quality_score"])
+                    logger.debug(
+                        "[stream=%s] track=%d embedding added quality=%.3f n_embs=%d",
+                        sid8, job.track.track_id, best["quality_score"], job.track.n_embeddings,
+                    )
+                else:
+                    logger.debug(
+                        "[stream=%s] track=%d embedding skipped — quality %.3f <= avg %.3f",
+                        sid8, job.track.track_id, best["quality_score"], avg_quality,
+                    )
+
+                job.track.last_identity_check = now_mono
+
+                if job.has_violation and job.track.identity_id is not None:
+                    logger.debug("[stream=%s] track=%d identity recheck triggered",
+                                 sid8, job.track.track_id)
+
+                # Check whether this track is ready for identity assignment.
+                # frames_seen is written only by the processing loop (safe to read
+                # without lock), but n_embeddings reads pending_embeddings which we
+                # own under lock — call is_confirmed() here while holding it.
+                if (
+                    self.tracker.is_confirmed(job.track)
+                    and job.track.identity_id is None
+                    and job.track.pending_embeddings
+                ):
+                    should_assign = True
+                    embs_copy  = list(job.track.pending_embeddings)
+                    quals_copy = list(job.track.pending_quality)
+
+            # ── Identity assignment — DB I/O outside lock ─────────────────────
+            if should_assign:
+                logger.debug("[stream=%s] track=%d confirmed — matching identity",
+                             sid8, job.track.track_id)
+                with self.app.app_context():
+                    identity_id, label, score = self.pipeline.match_and_store_track(
+                        embs_copy, quals_copy,
+                        stream_id=self.stream_id,
+                    )
+                with job.track.lock:
+                    # Guard: another job may have raced and already assigned an identity
+                    # (e.g. two violation frames queued back-to-back).  First writer wins.
+                    if job.track.identity_id is None:
+                        job.track.identity_id    = identity_id
+                        job.track.identity_label = label
+                        logger.debug(
+                            "[stream=%s] track=%d -> '%s' (score=%.3f)",
+                            sid8, job.track.track_id, label, score,
+                        )
+                    else:
+                        logger.debug(
+                            "[stream=%s] track=%d identity already assigned — skipping race result",
+                            sid8, job.track.track_id,
+                        )
 
     # ── Encoding loop ─────────────────────────────────────────────────────────
 
