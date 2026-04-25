@@ -56,7 +56,12 @@ from detection.association import split_detections, check_association
 from streams.tracker import FaceTracker
 from tasks.queue import ViolationJob
 
+import weakref
+
 logger = logging.getLogger(__name__)
+
+_registry_lock: Lock = Lock()
+_worker_registry = weakref.WeakSet()
 
 
 # ── Frame capture thread ──────────────────────────────────────────────────────
@@ -250,6 +255,9 @@ class StreamWorker:
 
             logger.info("Stream %s started (%s).", self.stream_id, src)
 
+            with _registry_lock:
+                _worker_registry.add(self)
+
             # Encoding loop: annotation + JPEG encode; never stalls YOLO.
             Thread(
                 target=self._encoding_loop,
@@ -271,6 +279,8 @@ class StreamWorker:
             logger.error("Stream %s crashed: %s\n%s",
                          self.stream_id, exc, traceback.format_exc())
         finally:
+            with _registry_lock:
+                _worker_registry.discard(self)
             if vs:
                 vs.stop()
             logger.info("Stream %s stopped.", self.stream_id)
@@ -438,6 +448,14 @@ class StreamWorker:
         ratios = [q.qsize() / q.maxsize for q in queues if q.maxsize > 0]
         return max(ratios) if ratios else 0.0
 
+    def _compute_global_pressure(self) -> float:
+        with _registry_lock:
+            workers = list(_worker_registry)
+        workers = [w for w in workers if w is not self]
+        if not workers:
+            return 0.0
+        return sum(w._compute_pressure() for w in workers) / len(workers)
+
     def _adapt_skip(self) -> None:
         """
         Raise or lower _current_skip by one step per frame based on pressure.
@@ -447,7 +465,7 @@ class StreamWorker:
           pressure ≤ LOAD_LOW  → decrease skip (down to 0)
           in between           → hold current level
         """
-        pressure = self._compute_pressure()
+        pressure = max(self._compute_pressure(), self._compute_global_pressure())
         if pressure >= self._load_high:
             self._current_skip = min(self._current_skip + 1, self._max_skip)
         elif pressure <= self._load_low:
