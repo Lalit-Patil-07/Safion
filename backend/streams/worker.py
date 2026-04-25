@@ -40,6 +40,9 @@ from collections import deque
 from threading import Event, Lock, Thread
 from typing import Optional
 
+import queue
+from dataclasses import dataclass
+
 import cv2
 import numpy as np
 
@@ -54,22 +57,25 @@ logger = logging.getLogger(__name__)
 
 class VideoStream:
     """
-    Dedicated capture thread.  Always keeps only the most recent frame.
-    Processing never blocks capture and capture never blocks processing.
-    A Lock protects the shared frame reference.
+    Dedicated capture thread.  Pushes frames into process_queue.
+    Frames are dropped (put_nowait) when the queue is full so that the
+    capture thread never blocks the processing thread, and the processing
+    thread never blocks the capture thread.
     """
 
-    def __init__(self, src, fps_limit: int = 30):
+    def __init__(self, src, fps_limit: int = 30, process_queue: queue.Queue = None):
         self.stream = cv2.VideoCapture(src)
         self.stream.set(cv2.CAP_PROP_BUFFERSIZE, 2)
         self._interval = 1.0 / max(1, fps_limit)
-        self._lock  = Lock()
-        self._frame: Optional[np.ndarray] = None
-        self.stopped = False
+        self._queue    = process_queue
+        self.stopped   = False
 
         grabbed, frame = self.stream.read()
-        if grabbed:
-            self._frame = frame
+        if grabbed and self._queue is not None:
+            try:
+                self._queue.put_nowait(frame)
+            except queue.Full:
+                pass
 
     def start(self) -> "VideoStream":
         Thread(target=self._update, daemon=True, name="vs-capture").start()
@@ -79,22 +85,32 @@ class VideoStream:
         while not self.stopped:
             t0 = time.monotonic()
             grabbed, frame = self.stream.read()
-            if grabbed:
-                with self._lock:
-                    self._frame = frame
+            if grabbed and self._queue is not None:
+                try:
+                    self._queue.put_nowait(frame)
+                except queue.Full:
+                    pass   # processing is behind — drop frame, never block
             sleep = self._interval - (time.monotonic() - t0)
             if sleep > 0:
                 time.sleep(sleep)
-
-    def read(self) -> Optional[np.ndarray]:
-        with self._lock:
-            return self._frame.copy() if self._frame is not None else None
 
     def stop(self) -> None:
         self.stopped = True
         time.sleep(0.1)
         if self.stream.isOpened():
             self.stream.release()
+
+
+@dataclass
+class _ProcessedFrame:
+    """Payload passed from the processing loop to the encoding loop."""
+    frame:           np.ndarray
+    detections:      list
+    orig_w:          int
+    orig_h:          int
+    frame_count:     int
+    fps_sample:      float   # filled by _processing_loop after timing
+    violation_delta: int     # 1 if any unsafe detection this frame, else 0
 
 
 # ── Annotation helper ─────────────────────────────────────────────────────────
@@ -160,6 +176,13 @@ class StreamWorker:
         self.identity_recheck_secs   = cfg["IDENTITY_RECHECK_SECONDS"]
         self.max_pending_embeddings  = cfg["MAX_PENDING_EMBEDDINGS"]
 
+        # ── Pipeline queues ───────────────────────────────────────────────────
+        # process_queue: VideoStream → _processing_loop  (raw frames)
+        # output_queue:  _processing_loop → _encoding_loop  (annotated results)
+        # Both are bounded; put_nowait drops frames rather than blocking a stage.
+        self.process_queue = queue.Queue(maxsize=cfg["PROCESS_QUEUE_SIZE"])
+        self.output_queue  = queue.Queue(maxsize=cfg["OUTPUT_QUEUE_SIZE"])
+
         self.tracker = FaceTracker(
             iou_threshold  = cfg["TRACK_IOU_THRESHOLD"],
             max_lost       = cfg["TRACK_MAX_LOST"],
@@ -192,7 +215,11 @@ class StreamWorker:
         vs: Optional[VideoStream] = None
         try:
             src = int(self.source_path) if self.source_type == "webcam" else self.source_path
-            vs  = VideoStream(src=src, fps_limit=self.fps_limit).start()
+            vs  = VideoStream(
+                src=src,
+                fps_limit=self.fps_limit,
+                process_queue=self.process_queue,
+            ).start()
             time.sleep(0.5)
 
             if not vs.stream.isOpened():
@@ -201,16 +228,15 @@ class StreamWorker:
 
             logger.info("Stream %s started (%s).", self.stream_id, src)
 
-            while not self.stop_event.is_set():
-                frame = vs.read()
-                if frame is None:
-                    time.sleep(0.01)
-                    continue
+            # Encoding loop runs in its own daemon thread so JPEG encode never
+            # stalls the YOLO/face processing loop.
+            Thread(
+                target=self._encoding_loop,
+                daemon=True,
+                name=f"enc-{self.stream_id[:8]}",
+            ).start()
 
-                t0 = time.monotonic()
-                self._process_frame(frame)
-                elapsed = time.monotonic() - t0
-                self._fps_deque.append(1.0 / elapsed if elapsed > 0 else 0.0)
+            self._processing_loop()
 
         except Exception as exc:
             import traceback
@@ -223,7 +249,7 @@ class StreamWorker:
 
     # ── Per-frame processing ──────────────────────────────────────────────────
 
-    def _process_frame(self, frame: np.ndarray) -> None:
+    def _process_frame(self, frame: np.ndarray) -> _ProcessedFrame:
         fc   = self._frame_count
         sid8 = self.stream_id[:8]
 
@@ -385,33 +411,85 @@ class StreamWorker:
 
         self._frame_count += 1
 
-        # ── Encode + publish (throttled to STREAM_OUTPUT_FPS) ─────────────────
-        # Annotation and JPEG encode are CPU-heavy. Skipping them on intermediate
-        # frames keeps detection running at full rate while reducing CPU load.
-        # Stats (fps, violation_count) update every frame regardless.
-        encode_this_frame = (self._frame_count % self.encode_every_n == 0)
+        return _ProcessedFrame(
+            frame           = frame,
+            detections      = detections,
+            orig_w          = orig_w,
+            orig_h          = orig_h,
+            frame_count     = self._frame_count,
+            fps_sample      = 0.0,   # filled by _processing_loop after timing
+            violation_delta = 1 if any(not d["safe"] for d in detections) else 0,
+        )
 
-        with self.store_lock:
-            if self.stream_id in self.stream_store:
-                stats = self.stream_store[self.stream_id]["stats"]
-                stats["fps"]         = round(
-                    sum(self._fps_deque) / max(len(self._fps_deque), 1), 1
-                )
-                stats["frame_count"] = self._frame_count
-                stats["violation_count"] = stats.get("violation_count", 0) + (
-                    1 if any(not d["safe"] for d in detections) else 0
-                )
-                stats["last_detections"] = detections
-                stats["resolution"]      = [orig_w, orig_h]
+    # ── Processing loop ───────────────────────────────────────────────────────
 
-                if encode_this_frame:
-                    _annotate(frame, detections)
-                    ret, buf = cv2.imencode(
-                        ".jpg", frame,
-                        [int(cv2.IMWRITE_JPEG_QUALITY), self.jpeg_quality],
+    def _processing_loop(self) -> None:
+        """
+        Reads raw frames from process_queue, runs YOLO + tracking + face logic
+        via _process_frame(), then pushes _ProcessedFrame into output_queue.
+
+        Dropping policy: if output_queue is full (encoding is behind) the
+        processed frame is discarded with put_nowait so this loop never blocks
+        on the encoding stage.
+        """
+        while not self.stop_event.is_set():
+            try:
+                frame = self.process_queue.get(timeout=0.05)
+            except queue.Empty:
+                continue
+
+            t0 = time.monotonic()
+            pf = self._process_frame(frame)
+            elapsed = time.monotonic() - t0
+
+            self._fps_deque.append(1.0 / elapsed if elapsed > 0 else 0.0)
+            pf.fps_sample = round(
+                sum(self._fps_deque) / max(len(self._fps_deque), 1), 1
+            )
+
+            try:
+                self.output_queue.put_nowait(pf)
+            except queue.Full:
+                pass   # encoding loop is behind — drop, never block
+
+    # ── Encoding loop ─────────────────────────────────────────────────────────
+
+    def _encoding_loop(self) -> None:
+        """
+        Reads _ProcessedFrame items from output_queue.
+        Handles annotation, JPEG encoding (throttled by encode_every_n), and
+        stats update under store_lock.  Runs in its own daemon thread so it
+        never stalls the processing loop.
+        """
+        enc_count = 0
+        while not self.stop_event.is_set():
+            try:
+                pf = self.output_queue.get(timeout=0.05)
+            except queue.Empty:
+                continue
+
+            enc_count += 1
+            encode_this_frame = (enc_count % self.encode_every_n == 0)
+
+            with self.store_lock:
+                if self.stream_id in self.stream_store:
+                    stats = self.stream_store[self.stream_id]["stats"]
+                    stats["fps"]             = pf.fps_sample
+                    stats["frame_count"]     = pf.frame_count
+                    stats["violation_count"] = (
+                        stats.get("violation_count", 0) + pf.violation_delta
                     )
-                    if ret:
-                        self.stream_store[self.stream_id]["frame"] = buf.tobytes()
+                    stats["last_detections"] = pf.detections
+                    stats["resolution"]      = [pf.orig_w, pf.orig_h]
+
+                    if encode_this_frame:
+                        _annotate(pf.frame, pf.detections)
+                        ret, buf = cv2.imencode(
+                            ".jpg", pf.frame,
+                            [int(cv2.IMWRITE_JPEG_QUALITY), self.jpeg_quality],
+                        )
+                        if ret:
+                            self.stream_store[self.stream_id]["frame"] = buf.tobytes()
 
 
 # ── Entry point (StreamManager interface — unchanged) ─────────────────────────

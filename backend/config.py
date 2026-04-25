@@ -55,6 +55,8 @@ class Config:
     YOLO_DEVICE: str            = _require("YOLO_DEVICE")
     YOLO_BATCH_SIZE: int        = int(os.environ.get("YOLO_BATCH_SIZE", "4"))
     YOLO_BATCH_TIMEOUT_MS: int  = int(os.environ.get("YOLO_BATCH_TIMEOUT_MS", "20"))
+    PROCESS_QUEUE_SIZE: int     = int(os.environ.get("PROCESS_QUEUE_SIZE", "2"))
+    OUTPUT_QUEUE_SIZE: int      = int(os.environ.get("OUTPUT_QUEUE_SIZE", "2"))
 
     # ── InsightFace ───────────────────────────────────────────────────────────
     INSIGHTFACE_MODEL: str          = _require("INSIGHTFACE_MODEL")
