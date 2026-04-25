@@ -234,9 +234,13 @@ class StreamWorker:
         self._max_skip:     int   = cfg["MAX_FRAME_SKIP"]
         self._load_high:    float = cfg["LOAD_HIGH_THRESHOLD"]
         self._load_low:     float = cfg["LOAD_LOW_THRESHOLD"]
-        self._current_skip: int        = 0
-        self._skip_counter: int        = 0
-        self._last_had_violation: bool = False
+        self._current_skip: int   = 0
+        self._skip_counter: int   = 0
+        self._last_had_violation: bool = False  # proxy for HIGH priority detection
+
+        self._quality_improve_margin:     float = cfg["EMBED_QUALITY_IMPROVE_MARGIN"]
+        self._identity_min_embs_delta:    int   = cfg["IDENTITY_MIN_EMBEDDINGS_DELTA"]
+        self._strong_match_threshold:     float = cfg["STRONG_MATCH_THRESHOLD"]
 
     # ── Main entry point ──────────────────────────────────────────────────────
 
@@ -368,6 +372,30 @@ class StreamWorker:
                     or (not identity_assigned)
                     or (cooldown_expired and periodic_frame)
                 )
+
+            # ── Significance guard ────────────────────────────────────────────
+            # Skip enqueue when the track already has a high-confidence identity
+            # and there is no violation — embed_crop would produce an embedding
+            # that is unlikely to improve on what we already have.
+            # Violations always bypass this guard (run_face=True + no suppression).
+            if run_face and not has_violation:
+                with track.lock:
+                    _conf      = track.last_match_confidence
+                    _n_at_last = track.embeddings_at_last_match
+                    _n_now     = track.n_embeddings
+                    _id        = track.identity_id
+
+                if (
+                    _id is not None
+                    and _conf >= self._strong_match_threshold
+                    and (_n_now - _n_at_last) < self._identity_min_embs_delta
+                ):
+                    run_face = False
+                    logger.debug(
+                        "[stream=%s] track=%d face enqueue suppressed — "
+                        "stable identity conf=%.3f emb_delta=%d",
+                        sid8, track.track_id, _conf, _n_now - _n_at_last,
+                    )
 
             if run_face and crop.size > 0:
                 face_job = _FaceJob(
@@ -595,7 +623,19 @@ class StreamWorker:
                     if job.track.pending_quality else 0.0
                 )
                 few_embeddings = job.track.n_embeddings < 3
-                quality_ok     = best["quality_score"] > avg_quality or few_embeddings
+                # Stable identified tracks require a meaningful quality improvement
+                # (EMBED_QUALITY_IMPROVE_MARGIN above average) to accept a new
+                # embedding — marginal frames don't move the prototype much and
+                # trigger unnecessary DB writes downstream.
+                # Unidentified tracks and low-count tracks use the relaxed gate.
+                stable = (
+                    job.track.identity_id is not None
+                    and job.track.last_match_confidence >= self._strong_match_threshold
+                )
+                if stable and not few_embeddings:
+                    quality_ok = best["quality_score"] > avg_quality * (1.0 + self._quality_improve_margin)
+                else:
+                    quality_ok = best["quality_score"] > avg_quality or few_embeddings
 
                 if quality_ok:
                     # deque(maxlen=MAX_PENDING_EMBEDDINGS) evicts oldest automatically —
@@ -644,8 +684,10 @@ class StreamWorker:
                     # identity (e.g. two violation frames queued back-to-back).
                     # First writer wins.
                     if job.track.identity_id is None:
-                        job.track.identity_id    = identity_id
-                        job.track.identity_label = label
+                        job.track.identity_id             = identity_id
+                        job.track.identity_label          = label
+                        job.track.last_match_confidence   = score
+                        job.track.embeddings_at_last_match = job.track.n_embeddings
                         logger.debug(
                             "[stream=%s] track=%d -> '%s' (score=%.3f)",
                             sid8, job.track.track_id, label, score,

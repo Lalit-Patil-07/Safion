@@ -112,7 +112,9 @@ class Config:
     MAX_FRAME_SKIP: int          = int(os.environ.get("MAX_FRAME_SKIP", "4"))
     LOAD_HIGH_THRESHOLD: float   = float(os.environ.get("LOAD_HIGH_THRESHOLD", "0.8"))
     LOAD_LOW_THRESHOLD: float    = float(os.environ.get("LOAD_LOW_THRESHOLD", "0.3"))
-    TRACK_STALE_TIMEOUT_S: float = float(os.environ.get("TRACK_STALE_TIMEOUT_S", "30.0"))
+    TRACK_STALE_TIMEOUT_S: float        = float(os.environ.get("TRACK_STALE_TIMEOUT_S", "30.0"))
+    EMBED_QUALITY_IMPROVE_MARGIN: float = float(os.environ.get("EMBED_QUALITY_IMPROVE_MARGIN", "0.12"))
+    IDENTITY_MIN_EMBEDDINGS_DELTA: int  = int(os.environ.get("IDENTITY_MIN_EMBEDDINGS_DELTA", "3"))
 
     # ── PPE Classes (internal constant — not configurable via env) ────────────
     PPE_CLASSES: dict = {

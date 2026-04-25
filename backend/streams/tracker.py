@@ -91,6 +91,12 @@ class Track:
 
         self.last_update_time: float = time.monotonic()   # wall-clock for stale pruning
 
+        # Identity match metadata — used to avoid redundant embed_crop calls
+        # and tighten the quality gate for already-identified stable tracks.
+        # Written by face worker under track.lock; read by processing loop.
+        self.last_match_confidence:   float = 0.0   # score from most recent match
+        self.embeddings_at_last_match: int  = 0     # n_embeddings when last matched
+
         # Guards all fields written by the face worker thread and read by the
         # processing loop: pending_embeddings, pending_quality, mean_embedding,
         # identity_id, identity_label, last_identity_check.
