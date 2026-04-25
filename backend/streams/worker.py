@@ -227,8 +227,9 @@ class StreamWorker:
         self._max_skip:     int   = cfg["MAX_FRAME_SKIP"]
         self._load_high:    float = cfg["LOAD_HIGH_THRESHOLD"]
         self._load_low:     float = cfg["LOAD_LOW_THRESHOLD"]
-        self._current_skip: int   = 0
-        self._skip_counter: int   = 0
+        self._current_skip: int        = 0
+        self._skip_counter: int        = 0
+        self._last_had_violation: bool = False
 
     # ── Main entry point ──────────────────────────────────────────────────────
 
@@ -452,6 +453,15 @@ class StreamWorker:
         elif pressure <= self._load_low:
             self._current_skip = max(self._current_skip - 1, 0)
 
+    # ── Priority detection ────────────────────────────────────────────────────
+
+    def _frame_priority(self) -> int:
+        if self._last_had_violation:
+            return 2
+        if any(t.identity_id is None for t in self.tracker.active_tracks):
+            return 1
+        return 0
+
     # ── Processing loop ───────────────────────────────────────────────────────
 
     def _processing_loop(self) -> None:
@@ -482,12 +492,21 @@ class StreamWorker:
             # are all bypassed.  The most recently captured frame is always the
             # one that gets through (VideoStream already drops stale frames).
             self._adapt_skip()
-            if self._skip_counter < self._current_skip:
+
+            priority = self._frame_priority()
+            if priority == 2:
+                effective_skip = 0
+            elif priority == 1:
+                effective_skip = self._current_skip // 2
+            else:
+                effective_skip = self._current_skip
+
+            if self._skip_counter < effective_skip:
                 self._skip_counter += 1
                 logger.debug(
-                    "[stream=%s] frame skipped (%d/%d) pressure=%.2f",
+                    "[stream=%s] frame skipped (%d/%d) priority=%d pressure=%.2f",
                     self.stream_id[:8], self._skip_counter,
-                    self._current_skip, self._compute_pressure(),
+                    effective_skip, priority, self._compute_pressure(),
                 )
                 continue
             self._skip_counter = 0
@@ -500,6 +519,7 @@ class StreamWorker:
             pf.fps_sample = round(
                 sum(self._fps_deque) / max(len(self._fps_deque), 1), 1
             )
+            self._last_had_violation = bool(pf.violation_delta)
 
             try:
                 self.output_queue.put_nowait(pf)
