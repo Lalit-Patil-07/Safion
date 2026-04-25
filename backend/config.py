@@ -109,9 +109,10 @@ class Config:
     FACE_QUEUE_SIZE: int        = int(os.environ.get("FACE_QUEUE_SIZE", "4"))
 
     # ── Adaptive frame skip ───────────────────────────────────────────────────
-    MAX_FRAME_SKIP: int         = int(os.environ.get("MAX_FRAME_SKIP", "4"))
-    LOAD_HIGH_THRESHOLD: float  = float(os.environ.get("LOAD_HIGH_THRESHOLD", "0.8"))
-    LOAD_LOW_THRESHOLD: float   = float(os.environ.get("LOAD_LOW_THRESHOLD", "0.3"))
+    MAX_FRAME_SKIP: int          = int(os.environ.get("MAX_FRAME_SKIP", "4"))
+    LOAD_HIGH_THRESHOLD: float   = float(os.environ.get("LOAD_HIGH_THRESHOLD", "0.8"))
+    LOAD_LOW_THRESHOLD: float    = float(os.environ.get("LOAD_LOW_THRESHOLD", "0.3"))
+    TRACK_STALE_TIMEOUT_S: float = float(os.environ.get("TRACK_STALE_TIMEOUT_S", "30.0"))
 
     # ── PPE Classes (internal constant — not configurable via env) ────────────
     PPE_CLASSES: dict = {

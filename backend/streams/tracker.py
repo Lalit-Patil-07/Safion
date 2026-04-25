@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import threading
 import time
+from collections import deque
 from typing import Optional
 
 import numpy as np
@@ -61,7 +62,7 @@ class Track:
     """One tracked person across frames."""
     _next_id = 1
 
-    def __init__(self, bbox: list[float], iou_threshold: float):
+    def __init__(self, bbox: list[float], iou_threshold: float, max_embeddings: int = 20):
         self.track_id      = Track._next_id
         Track._next_id    += 1
         self.bbox          = bbox
@@ -72,9 +73,10 @@ class Track:
         self.identity_id   : Optional[str] = None    # assigned after confirmation
         self.identity_label: str = ""
 
-        # Accumulated embeddings (before identity assignment)
-        self.pending_embeddings: list[np.ndarray] = []
-        self.pending_quality:    list[float]       = []
+        # Bounded deques — oldest embedding auto-dropped when maxlen is reached.
+        # O(1) append+evict vs O(n) list.pop(0); np.stack/np.array accept deques.
+        self.pending_embeddings: deque = deque(maxlen=max_embeddings)
+        self.pending_quality:    deque = deque(maxlen=max_embeddings)
 
         # After identity is assigned, keep the mean embedding for matching
         self.mean_embedding: Optional[np.ndarray] = None
@@ -87,6 +89,8 @@ class Track:
         # timestamp is older than the cooldown, reducing InsightFace load.
         self.last_identity_check: float = 0.0   # monotonic
 
+        self.last_update_time: float = time.monotonic()   # wall-clock for stale pruning
+
         # Guards all fields written by the face worker thread and read by the
         # processing loop: pending_embeddings, pending_quality, mean_embedding,
         # identity_id, identity_label, last_identity_check.
@@ -95,9 +99,10 @@ class Track:
         self.lock: threading.Lock = threading.Lock()
 
     def update(self, bbox: list[float]) -> None:
-        self.bbox         = bbox
-        self.frames_seen += 1
-        self.frames_lost  = 0
+        self.bbox             = bbox
+        self.frames_seen     += 1
+        self.frames_lost      = 0
+        self.last_update_time = time.monotonic()
 
     def mark_lost(self) -> None:
         self.frames_lost += 1
@@ -153,11 +158,15 @@ class FaceTracker:
         max_lost:       int   = 10,
         min_frames:     int   = 3,
         min_embeddings: int   = 3,
+        max_embeddings: int   = 20,
+        stale_timeout:  float = 30.0,
     ):
         self.iou_threshold  = iou_threshold
         self.max_lost       = max_lost
         self.min_frames     = min_frames
         self.min_embeddings = min_embeddings
+        self.max_embeddings = max_embeddings
+        self.stale_timeout  = stale_timeout
         self._tracks: list[Track] = []
 
     def update(self, bbox: list[float]) -> Track:
@@ -180,7 +189,7 @@ class FaceTracker:
             return best_track
 
         # No match — create new track
-        new_track = Track(bbox, self.iou_threshold)
+        new_track = Track(bbox, self.iou_threshold, self.max_embeddings)
         self._tracks.append(new_track)
         return new_track
 
@@ -193,7 +202,12 @@ class FaceTracker:
             if not any(_iou(t.bbox, b) >= self.iou_threshold for b in active_bboxes):
                 t.mark_lost()
 
-        self._tracks = [t for t in self._tracks if t.frames_lost <= self.max_lost]
+        now = time.monotonic()
+        self._tracks = [
+            t for t in self._tracks
+            if t.frames_lost <= self.max_lost
+            and (now - t.last_update_time) <= self.stale_timeout
+        ]
 
     @property
     def active_tracks(self) -> list[Track]:

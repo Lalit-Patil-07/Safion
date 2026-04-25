@@ -210,6 +210,8 @@ class StreamWorker:
             max_lost       = cfg["TRACK_MAX_LOST"],
             min_frames     = cfg["TRACK_MIN_FRAMES"],
             min_embeddings = cfg["TRACK_MIN_EMBEDDINGS"],
+            max_embeddings = cfg["MAX_PENDING_EMBEDDINGS"],
+            stale_timeout  = cfg["TRACK_STALE_TIMEOUT_S"],
         )
 
         # PROCESS_WIDTH: resize frame to this width before YOLO inference.
@@ -596,10 +598,8 @@ class StreamWorker:
                 quality_ok     = best["quality_score"] > avg_quality or few_embeddings
 
                 if quality_ok:
-                    # Embedding cap — discard oldest to bound memory.
-                    if len(job.track.pending_embeddings) >= self.max_pending_embeddings:
-                        job.track.pending_embeddings.pop(0)
-                        job.track.pending_quality.pop(0)
+                    # deque(maxlen=MAX_PENDING_EMBEDDINGS) evicts oldest automatically —
+                    # no manual cap or O(n) pop(0) needed.
                     job.track.add_embedding(best["embedding"], best["quality_score"])
                     logger.debug(
                         "[stream=%s] track=%d embedding added quality=%.3f n_embs=%d",
