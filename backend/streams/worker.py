@@ -4,44 +4,50 @@ Stream worker — YOLO + IoU tracking + violation dispatch
 Architecture
 ------------
 VideoStream (capture thread)
-  └─ continuously reads frames; always stores only the latest (no queue)
+  └─ pushes frames into process_queue (bounded, drop on full)
 
-StreamWorker (processing loop — this thread)
-  └─ reads latest frame from VideoStream
-  └─ YOLO inference
+StreamWorker._processing_loop (main worker thread)
+  └─ adaptive frame skip gate (queue-pressure-based)
+  └─ YOLO batched inference (via YOLOBatcher — non-blocking submit)
   └─ per-person IoU tracking
-  └─ face embedding (SKIPPED on most frames — see FACE_EMBED_EVERY_N_FRAMES)
-  └─ identity assignment
-  └─ violation dispatch → TaskQueue (async, non-blocking)
-  └─ JPEG encode → stream_store
+  └─ face job enqueue → face_queue (non-blocking put_nowait)
+  └─ violation dispatch → TaskQueue
+  └─ pushes _ProcessedFrame → output_queue (non-blocking put_nowait)
 
-Face embedding optimisation
----------------------------
-embed_crop() is ~100ms per call on GPU, ~300ms on CPU.  Running it on every
-frame serialises the entire pipeline and caps FPS at 3-10.
+StreamWorker._face_worker_loop (daemon thread per stream)
+  └─ reads _FaceJob from face_queue
+  └─ runs embed_crop() (blocking InsightFace — isolated here)
+  └─ quality gate + embedding update (under track.lock)
+  └─ identity assignment when track confirmed (DB I/O outside lock)
 
-New behaviour:
-  - Run embed_crop() when ANY violation is detected on a person crop, OR
-  - Run embed_crop() every FACE_EMBED_EVERY_N_FRAMES frames (periodic refresh)
-  - Skip it on all other frames
+StreamWorker._encoding_loop (daemon thread per stream)
+  └─ reads _ProcessedFrame from output_queue
+  └─ annotation + JPEG encode (throttled to STREAM_OUTPUT_FPS)
+  └─ stats update under store_lock
 
-This decouples detection FPS (limited by YOLO, ~15-30 FPS) from face
-embedding frequency (limited by InsightFace, ~3-10 FPS).
+Adaptive frame skipping
+-----------------------
+_processing_loop evaluates queue fill ratios before each frame.
+  pressure ≥ LOAD_HIGH_THRESHOLD → increase skip rate (up to MAX_FRAME_SKIP)
+  pressure ≤ LOAD_LOW_THRESHOLD  → decrease skip rate (down to 0)
+  in between                     → hold current rate
+Skipped frames are dropped before YOLO — no tracking, face, or encode cost.
 
-Multi-stream readiness
-----------------------
-All state is encapsulated in StreamWorker.  Multiple instances run in parallel
-with no shared mutable state between streams.
+Thread safety
+-------------
+Fields written by face worker and read by processing loop are protected by
+track.lock (added to Track in tracker.py).  Fields written only by the
+processing loop (frames_seen, frames_lost, bbox, last_violation_time) need
+no lock — single writer.
 """
 
 import logging
+import queue
 import time
 from collections import deque
+from dataclasses import dataclass
 from threading import Event, Lock, Thread
 from typing import Optional
-
-import queue
-from dataclasses import dataclass
 
 import cv2
 import numpy as np
@@ -101,6 +107,23 @@ class VideoStream:
             self.stream.release()
 
 
+# ── Annotation helper ─────────────────────────────────────────────────────────
+
+def _annotate(frame: np.ndarray, detections: list[dict]) -> None:
+    for det in detections:
+        x1, y1, x2, y2 = map(int, det["bbox"])
+        h = det["color"].lstrip("#")
+        bgr = tuple(int(h[i:i+2], 16) for i in (4, 2, 0))
+        cv2.rectangle(frame, (x1, y1), (x2, y2), bgr, 2)
+        label = f"{det['class_name']} {det['confidence']:.2f}"
+        (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+        cv2.rectangle(frame, (x1, y1 - th - 10), (x1 + tw + 4, y1), bgr, -1)
+        cv2.putText(frame, label, (x1 + 2, y1 - 5),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+
+
+# ── Pipeline data classes ─────────────────────────────────────────────────────
+
 @dataclass
 class _ProcessedFrame:
     """Payload passed from the processing loop to the encoding loop."""
@@ -126,21 +149,6 @@ class _FaceJob:
     frame_count:   int
 
 
-# ── Annotation helper ─────────────────────────────────────────────────────────
-
-def _annotate(frame: np.ndarray, detections: list[dict]) -> None:
-    for det in detections:
-        x1, y1, x2, y2 = map(int, det["bbox"])
-        h = det["color"].lstrip("#")
-        bgr = tuple(int(h[i:i+2], 16) for i in (4, 2, 0))
-        cv2.rectangle(frame, (x1, y1), (x2, y2), bgr, 2)
-        label = f"{det['class_name']} {det['confidence']:.2f}"
-        (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
-        cv2.rectangle(frame, (x1, y1 - th - 10), (x1 + tw + 4, y1), bgr, -1)
-        cv2.putText(frame, label, (x1 + 2, y1 - 5),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-
-
 # ── Per-stream worker ─────────────────────────────────────────────────────────
 
 class StreamWorker:
@@ -148,16 +156,10 @@ class StreamWorker:
     Encapsulates all mutable state for one stream.
     No global state — multiple instances run safely in parallel.
 
-    Processing loop:
-      1. Read latest frame (non-blocking; skip if no new frame)
-      2. YOLO inference
-      3. Per-person IoU tracking
-      4. Face embedding — only when:
-           a) a violation is associated with this person, OR
-           b) every FACE_EMBED_EVERY_N_FRAMES frames (periodic identity refresh)
-      5. Identity assignment (deferred until track is confirmed)
-      6. Violation dispatch -> async TaskQueue (non-blocking)
-      7. JPEG encode -> stream_store (lock-protected write)
+    Three concurrent threads per stream:
+      _processing_loop  — YOLO + tracking + face job dispatch  (this thread)
+      _face_worker_loop — InsightFace embed_crop + identity    (daemon)
+      _encoding_loop    — annotation + JPEG encode + stats     (daemon)
     """
 
     def __init__(
@@ -185,9 +187,9 @@ class StreamWorker:
         self.jpeg_quality = cfg["STREAM_JPEG_QUALITY"]
         self.violation_cd = cfg["VIOLATION_COOLDOWN_SECONDS"]
         self.fps_limit    = cfg["FRAME_RATE_LIMIT"]
-        self.face_every_n            = cfg["FACE_EMBED_EVERY_N_FRAMES"]
-        self.identity_recheck_secs   = cfg["IDENTITY_RECHECK_SECONDS"]
-        self.max_pending_embeddings  = cfg["MAX_PENDING_EMBEDDINGS"]
+        self.face_every_n           = cfg["FACE_EMBED_EVERY_N_FRAMES"]
+        self.identity_recheck_secs  = cfg["IDENTITY_RECHECK_SECONDS"]
+        self.max_pending_embeddings = cfg["MAX_PENDING_EMBEDDINGS"]
 
         # ── Pipeline queues ───────────────────────────────────────────────────
         # process_queue : VideoStream      → _processing_loop   (raw frames)
@@ -206,25 +208,29 @@ class StreamWorker:
         )
 
         # PROCESS_WIDTH: resize frame to this width before YOLO inference.
-        # Smaller = faster GPU inference, same detection quality at 640.
-        # 0 = disabled (use full resolution).
         self.process_width = cfg["PROCESS_WIDTH"]
 
-        # STREAM_OUTPUT_FPS: how many annotated JPEG frames to publish per
-        # second.  Lower values reduce CPU encode time across many streams.
-        # Encode is skipped on intermediate frames; stats still update every frame.
+        # STREAM_OUTPUT_FPS: how many annotated JPEG frames to publish per second.
         output_fps = cfg["STREAM_OUTPUT_FPS"]
-        # FIX: guard against STREAM_OUTPUT_FPS=0 or values exceeding FRAME_RATE_LIMIT,
-        #      both of which would cause ZeroDivisionError or encode on every frame.
         _fps_limit = cfg["FRAME_RATE_LIMIT"]
         if output_fps <= 0 or output_fps > _fps_limit:
-            output_fps = _fps_limit   # encode every frame as safe fallback
+            output_fps = _fps_limit
         self.encode_every_n = max(1, round(_fps_limit / output_fps))
 
-        self._fps_deque:  deque = deque(maxlen=30)
-        self._frame_count: int  = 0
+        self._fps_deque:   deque = deque(maxlen=30)
+        self._frame_count: int   = 0
 
-    # ── Main loop ─────────────────────────────────────────────────────────────
+        # ── Adaptive frame skip ───────────────────────────────────────────────
+        # _current_skip: frames to drop between each processed frame (0 = off).
+        # _skip_counter: consecutive frames skipped in the current run.
+        # Both adapted each frame by _adapt_skip() via queue fill ratios.
+        self._max_skip:     int   = cfg["MAX_FRAME_SKIP"]
+        self._load_high:    float = cfg["LOAD_HIGH_THRESHOLD"]
+        self._load_low:     float = cfg["LOAD_LOW_THRESHOLD"]
+        self._current_skip: int   = 0
+        self._skip_counter: int   = 0
+
+    # ── Main entry point ──────────────────────────────────────────────────────
 
     def run(self) -> None:
         vs: Optional[VideoStream] = None
@@ -290,9 +296,6 @@ class StreamWorker:
         detections = self.batcher.submit(infer_frame)
 
         # Scale bboxes from inference resolution back to original resolution.
-        # Crops for InsightFace and annotation always use the original frame.
-        # FIX: cast to int immediately so downstream code (map(int, bbox),
-        #      check_association) never receives float coordinates.
         if scale_x != 1.0 or scale_y != 1.0:
             for det in detections:
                 x1, y1, x2, y2 = det["bbox"]
@@ -307,7 +310,7 @@ class StreamWorker:
             logger.debug("[stream=%s frame=%d] YOLO: %d persons, %d violations",
                          sid8, fc, len(persons), len(violations))
 
-        # ── Per-person tracking + face + violation dispatch ───────────────────
+        # ── Per-person tracking + face job enqueue + violation dispatch ────────
         active_bboxes: list[list[float]] = []
 
         for person in persons:
@@ -323,27 +326,35 @@ class StreamWorker:
                 continue
 
             # Violation association — cheap bbox check, done before face
-            associated = [v for v in violations if check_association(bbox, v["bbox"])]
+            associated    = [v for v in violations if check_association(bbox, v["bbox"])]
             has_violation = bool(associated)
 
-            # ── Face job enqueue — non-blocking ──────────────────────────────
+            # ── Face job enqueue — non-blocking ───────────────────────────────
             # Processing loop never calls embed_crop() directly.
-            # Cooldown / periodic checks preserve the Stage 3 semantics; the
-            # only change is that the work is handed off and we continue
-            # immediately rather than blocking on InsightFace.
+            # Cooldown / periodic checks preserve Stage 3 semantics; the only
+            # change is work is handed off and we continue immediately rather
+            # than blocking on InsightFace.
             now_mono = time.monotonic()
             with track.lock:
                 identity_assigned = track.identity_id is not None
-                cooldown_expired  = (now_mono - track.last_identity_check) > self.identity_recheck_secs
+                cooldown_expired  = (
+                    (now_mono - track.last_identity_check) > self.identity_recheck_secs
+                )
             periodic_frame = (fc % self.face_every_n == 0)
 
             if identity_assigned and not cooldown_expired and not has_violation:
-                logger.debug("[stream=%s] track=%d identity cooldown active (%.1fs remaining)",
-                             sid8, track.track_id,
-                             self.identity_recheck_secs - (now_mono - track.last_identity_check))
+                logger.debug(
+                    "[stream=%s] track=%d identity cooldown active (%.1fs remaining)",
+                    sid8, track.track_id,
+                    self.identity_recheck_secs - (now_mono - track.last_identity_check),
+                )
                 run_face = False
             else:
-                run_face = has_violation or (not identity_assigned) or (cooldown_expired and periodic_frame)
+                run_face = (
+                    has_violation
+                    or (not identity_assigned)
+                    or (cooldown_expired and periodic_frame)
+                )
 
             if run_face and crop.size > 0:
                 face_job = _FaceJob(
@@ -369,7 +380,7 @@ class StreamWorker:
                 logger.debug("[stream=%s] track=%d frames=%d",
                              sid8, track.track_id, track.frames_seen)
 
-            # Violation dispatch
+            # ── Violation dispatch ─────────────────────────────────────────────
             if track.frames_seen < self.tracker.min_frames:
                 continue
             if not associated:
@@ -413,12 +424,47 @@ class StreamWorker:
             violation_delta = 1 if any(not d["safe"] for d in detections) else 0,
         )
 
+    # ── Adaptive skip helpers ─────────────────────────────────────────────────
+
+    def _compute_pressure(self) -> float:
+        """
+        Returns the maximum fill ratio (0.0–1.0) across the three bounded
+        pipeline queues.  Using MAX rather than average means a single
+        saturated stage triggers back-pressure immediately — the slowest
+        stage sets the pace.
+        """
+        queues = [self.process_queue, self.output_queue, self.face_queue]
+        ratios = [q.qsize() / q.maxsize for q in queues if q.maxsize > 0]
+        return max(ratios) if ratios else 0.0
+
+    def _adapt_skip(self) -> None:
+        """
+        Raise or lower _current_skip by one step per frame based on pressure.
+
+        Hysteresis via separate HIGH/LOW thresholds prevents rapid oscillation:
+          pressure ≥ LOAD_HIGH → increase skip (up to MAX_FRAME_SKIP)
+          pressure ≤ LOAD_LOW  → decrease skip (down to 0)
+          in between           → hold current level
+        """
+        pressure = self._compute_pressure()
+        if pressure >= self._load_high:
+            self._current_skip = min(self._current_skip + 1, self._max_skip)
+        elif pressure <= self._load_low:
+            self._current_skip = max(self._current_skip - 1, 0)
+
     # ── Processing loop ───────────────────────────────────────────────────────
 
     def _processing_loop(self) -> None:
         """
-        Reads raw frames from process_queue, runs YOLO + tracking + face logic
-        via _process_frame(), then pushes _ProcessedFrame into output_queue.
+        Reads raw frames from process_queue, runs YOLO + tracking + face job
+        dispatch via _process_frame(), then pushes _ProcessedFrame into
+        output_queue.
+
+        Frame skipping is applied BEFORE any heavy work.  The skip counter is
+        evaluated after each queue-pressure check so skipping adapts every
+        frame.  Safety invariant: _current_skip is capped at MAX_FRAME_SKIP,
+        so at worst 1 in (MAX_FRAME_SKIP + 1) frames is processed — the
+        pipeline can never be completely starved.
 
         Dropping policy: if output_queue is full (encoding is behind) the
         processed frame is discarded with put_nowait so this loop never blocks
@@ -429,6 +475,22 @@ class StreamWorker:
                 frame = self.process_queue.get(timeout=0.05)
             except queue.Empty:
                 continue
+
+            # ── Adaptive skip gate (before ANY heavy work) ────────────────────
+            # Re-evaluate pressure every frame; one step up/down per evaluation.
+            # Skipped frames are discarded here — tracking, YOLO, face, encoding
+            # are all bypassed.  The most recently captured frame is always the
+            # one that gets through (VideoStream already drops stale frames).
+            self._adapt_skip()
+            if self._skip_counter < self._current_skip:
+                self._skip_counter += 1
+                logger.debug(
+                    "[stream=%s] frame skipped (%d/%d) pressure=%.2f",
+                    self.stream_id[:8], self._skip_counter,
+                    self._current_skip, self._compute_pressure(),
+                )
+                continue
+            self._skip_counter = 0
 
             t0 = time.monotonic()
             pf = self._process_frame(frame)
@@ -468,7 +530,7 @@ class StreamWorker:
             except queue.Empty:
                 continue
 
-            # ── Embedding (blocking InsightFace call) ─────────────────────────
+            # ── Embedding (blocking InsightFace call — isolated here) ──────────
             with self.app.app_context():
                 faces = self.pipeline.embed_crop(job.crop)
 
@@ -518,9 +580,9 @@ class StreamWorker:
                                  sid8, job.track.track_id)
 
                 # Check whether this track is ready for identity assignment.
-                # frames_seen is written only by the processing loop (safe to read
-                # without lock), but n_embeddings reads pending_embeddings which we
-                # own under lock — call is_confirmed() here while holding it.
+                # frames_seen is written only by the processing loop (safe to
+                # read without lock), but n_embeddings reads pending_embeddings
+                # which we own under lock — call is_confirmed() here.
                 if (
                     self.tracker.is_confirmed(job.track)
                     and job.track.identity_id is None
@@ -540,8 +602,9 @@ class StreamWorker:
                         stream_id=self.stream_id,
                     )
                 with job.track.lock:
-                    # Guard: another job may have raced and already assigned an identity
-                    # (e.g. two violation frames queued back-to-back).  First writer wins.
+                    # Guard: another job may have raced and already assigned an
+                    # identity (e.g. two violation frames queued back-to-back).
+                    # First writer wins.
                     if job.track.identity_id is None:
                         job.track.identity_id    = identity_id
                         job.track.identity_label = label

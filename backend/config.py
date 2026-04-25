@@ -18,7 +18,6 @@ class Config:
     # ── Database ──────────────────────────────────────────────────────────────
     BASE_DIR: str = os.path.dirname(os.path.abspath(__file__))
 
-    # All five DB_* variables are mandatory — DATABASE_URL is never read from env.
     _DB_USER:     str = _require("DB_USER")
     _DB_PASSWORD: str = _require("DB_PASSWORD")
     _DB_HOST:     str = _require("DB_HOST")
@@ -40,7 +39,6 @@ class Config:
     JWT_ALGORITHM: str                   = "HS256"
 
     # ── File Storage ──────────────────────────────────────────────────────────
-    # Path defaults are derived from BASE_DIR — internal, not operator config.
     VIOLATIONS_IMAGE_DIR: str = os.environ.get(
         "VIOLATIONS_IMAGE_DIR", os.path.join(BASE_DIR, "violations_images")
     )
@@ -49,15 +47,11 @@ class Config:
     )
 
     # ── YOLO ──────────────────────────────────────────────────────────────────
-    # MODEL_PATH default is relative to BASE_DIR — internal path, not operator config.
     MODEL_PATH: str             = os.environ.get("MODEL_PATH", os.path.join(BASE_DIR, "..", "best.pt"))
     CONFIDENCE_THRESHOLD: float = float(_require("CONFIDENCE_THRESHOLD"))
     YOLO_DEVICE: str            = _require("YOLO_DEVICE")
     YOLO_BATCH_SIZE: int        = int(os.environ.get("YOLO_BATCH_SIZE", "4"))
     YOLO_BATCH_TIMEOUT_MS: int  = int(os.environ.get("YOLO_BATCH_TIMEOUT_MS", "20"))
-    PROCESS_QUEUE_SIZE: int     = int(os.environ.get("PROCESS_QUEUE_SIZE", "2"))
-    OUTPUT_QUEUE_SIZE: int      = int(os.environ.get("OUTPUT_QUEUE_SIZE", "2"))
-    FACE_QUEUE_SIZE: int        = int(os.environ.get("FACE_QUEUE_SIZE", "4"))
 
     # ── InsightFace ───────────────────────────────────────────────────────────
     INSIGHTFACE_MODEL: str          = _require("INSIGHTFACE_MODEL")
@@ -104,10 +98,20 @@ class Config:
     TASK_QUEUE_MAXSIZE: int  = int(_require("TASK_QUEUE_MAXSIZE"))
 
     # ── Identity temporal bias ───────────────────────────────────────────────
-    TEMPORAL_BOOST: float  = float(_require("TEMPORAL_BOOST"))
-    EMA_ALPHA: float                = float(_require("EMA_ALPHA"))
-    STRONG_MATCH_THRESHOLD: float   = float(_require("STRONG_MATCH_THRESHOLD"))
-    RECENT_WINDOW: float   = float(_require("RECENT_WINDOW"))
+    TEMPORAL_BOOST: float         = float(_require("TEMPORAL_BOOST"))
+    EMA_ALPHA: float              = float(_require("EMA_ALPHA"))
+    STRONG_MATCH_THRESHOLD: float = float(_require("STRONG_MATCH_THRESHOLD"))
+    RECENT_WINDOW: float          = float(_require("RECENT_WINDOW"))
+
+    # ── Pipeline queues ───────────────────────────────────────────────────────
+    PROCESS_QUEUE_SIZE: int     = int(os.environ.get("PROCESS_QUEUE_SIZE", "2"))
+    OUTPUT_QUEUE_SIZE: int      = int(os.environ.get("OUTPUT_QUEUE_SIZE", "2"))
+    FACE_QUEUE_SIZE: int        = int(os.environ.get("FACE_QUEUE_SIZE", "4"))
+
+    # ── Adaptive frame skip ───────────────────────────────────────────────────
+    MAX_FRAME_SKIP: int         = int(os.environ.get("MAX_FRAME_SKIP", "4"))
+    LOAD_HIGH_THRESHOLD: float  = float(os.environ.get("LOAD_HIGH_THRESHOLD", "0.8"))
+    LOAD_LOW_THRESHOLD: float   = float(os.environ.get("LOAD_LOW_THRESHOLD", "0.3"))
 
     # ── PPE Classes (internal constant — not configurable via env) ────────────
     PPE_CLASSES: dict = {
