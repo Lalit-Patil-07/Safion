@@ -66,53 +66,6 @@ _worker_registry = weakref.WeakSet()
 
 # ── Frame capture thread ──────────────────────────────────────────────────────
 
-_APPSINK = "appsink max-buffers=2 drop=true sync=false"
-
-
-def _gstreamer_pipeline_gpu(src) -> Optional[str]:
-    """
-    NVIDIA hardware decode pipeline (nvv4l2decoder + nvvidconv).
-    Only constructed for RTSP and device sources — file sources are uncommon
-    enough that software decode is acceptable there.
-    Returns None when the source type is not supported by the GPU path.
-    """
-    if isinstance(src, str) and src.startswith("rtsp://"):
-        return (
-            f"rtspsrc location={src} latency=50 ! "
-            f"rtph264depay ! h264parse ! "
-            f"nvv4l2decoder ! "
-            f"nvvidconv ! "
-            f"video/x-raw,format=BGR ! "
-            f"{_APPSINK}"
-        )
-    if isinstance(src, int):
-        return (
-            f"v4l2src device=/dev/video{src} ! "
-            f"video/x-raw ! nvvidconv ! "
-            f"video/x-raw,format=BGR ! "
-            f"{_APPSINK}"
-        )
-    return None
-
-
-def _gstreamer_pipeline_cpu(src, fps_limit: int) -> str:
-    """
-    Software GStreamer decode pipeline (avdec_h264 / uridecodebin).
-    Used as first fallback when the GPU pipeline fails.
-    appsink drop=true matches the GPU path — latest-frame semantics.
-    """
-    caps = f"video/x-raw,framerate={fps_limit}/1"
-    sink = f"videoconvert ! {_APPSINK} caps={caps}"
-
-    if isinstance(src, str) and src.startswith("rtsp://"):
-        return (
-            f"rtspsrc location={src} latency=100 ! "
-            f"rtph264depay ! h264parse ! avdec_h264 ! {sink}"
-        )
-    if isinstance(src, int):
-        return f"v4l2src device=/dev/video{src} ! {sink}"
-    return f"uridecodebin uri={src} ! {sink}"
-
 
 class VideoStream:
     """
@@ -120,22 +73,16 @@ class VideoStream:
     Frames are dropped (put_nowait) when the queue is full so that the
     capture thread never blocks the processing thread, and the processing
     thread never blocks the capture thread.
-
-    If backend='GSTREAMER' a GStreamer appsink pipeline is used; appsink
-    drop=true replicates the latest-frame behaviour without a ring buffer.
-    On any GStreamer open failure the code retries with the default OpenCV
-    backend so a misconfigured GStreamer install never takes down a stream.
     """
 
-    def __init__(self, src, fps_limit: int = 30, process_queue: queue.Queue = None,
-                 backend: str = "OPENCV"):
+    def __init__(self, src, fps_limit: int = 30, process_queue: queue.Queue = None):
         self._interval = 1.0 / max(1, fps_limit)
         self._queue    = process_queue
         self.stopped   = False
         self.last_frame_time:      float = time.monotonic()
         self.consecutive_failures: int   = 0
 
-        self.stream = self._open(src, fps_limit, backend)
+        self.stream = self._open(src)
         self.stream.set(cv2.CAP_PROP_BUFFERSIZE, 2)
 
         grabbed, frame = self.stream.read()
@@ -181,41 +128,7 @@ class VideoStream:
             self.stream.release()
 
     @staticmethod
-    def _open(src, fps_limit: int, backend: str) -> cv2.VideoCapture:
-        """
-        Open VideoCapture with a three-tier fallback:
-          1. GStreamer GPU decode  (nvv4l2decoder)   — lowest CPU, highest throughput
-          2. GStreamer CPU decode  (avdec_h264)       — software decode, still GStreamer
-          3. OpenCV / FFmpeg                          — universal fallback
-
-        Tiers 1 and 2 are only attempted when backend == "GSTREAMER".
-        Each tier is validated with isOpened() before committing.
-        """
-        if backend == "GSTREAMER":
-            # ── Tier 1: GPU decode ────────────────────────────────────────────
-            gpu_pipeline = _gstreamer_pipeline_gpu(src)
-            if gpu_pipeline is not None:
-                cap = cv2.VideoCapture(gpu_pipeline, cv2.CAP_GSTREAMER)
-                if cap.isOpened():
-                    logger.info("VideoStream: GStreamer GPU decode active (%s…)",
-                                gpu_pipeline[:80])
-                    return cap
-                cap.release()
-                logger.warning("VideoStream: GPU pipeline failed for '%s' — "
-                               "falling back to CPU decode.", src)
-
-            # ── Tier 2: CPU GStreamer decode ──────────────────────────────────
-            cpu_pipeline = _gstreamer_pipeline_cpu(src, fps_limit)
-            cap = cv2.VideoCapture(cpu_pipeline, cv2.CAP_GSTREAMER)
-            if cap.isOpened():
-                logger.info("VideoStream: GStreamer CPU decode active (%s…)",
-                            cpu_pipeline[:80])
-                return cap
-            cap.release()
-            logger.warning("VideoStream: GStreamer CPU pipeline failed for '%s' — "
-                           "falling back to OpenCV backend.", src)
-
-        # ── Tier 3: OpenCV / FFmpeg ───────────────────────────────────────────
+    def _open(src) -> cv2.VideoCapture:
         cap = cv2.VideoCapture(src)
         logger.info("VideoStream: OpenCV backend opened for '%s'.", src)
         return cap
@@ -396,7 +309,6 @@ class StreamWorker:
                         src=src,
                         fps_limit=self.fps_limit,
                         process_queue=self.process_queue,
-                        backend=self.app.config["VIDEO_CAPTURE_BACKEND"],
                     ).start()
                     time.sleep(0.5)
                 except Exception as exc:
