@@ -283,9 +283,23 @@ class StreamWorker:
         self._skip_counter: int   = 0
         self._last_had_violation: bool = False  # proxy for HIGH priority detection
 
-        self._quality_improve_margin:     float = cfg["EMBED_QUALITY_IMPROVE_MARGIN"]
-        self._identity_min_embs_delta:    int   = cfg["IDENTITY_MIN_EMBEDDINGS_DELTA"]
-        self._strong_match_threshold:     float = cfg["STRONG_MATCH_THRESHOLD"]
+        self._quality_improve_margin:  float = cfg["EMBED_QUALITY_IMPROVE_MARGIN"]
+        self._identity_min_embs_delta: int   = cfg["IDENTITY_MIN_EMBEDDINGS_DELTA"]
+        self._strong_match_threshold:  float = cfg["STRONG_MATCH_THRESHOLD"]
+
+        # ── Violation write buffer ─────────────────────────────────────────────
+        # Jobs accumulate here and are flushed to TaskQueue in bulk when either
+        # _violation_batch_size is reached OR _violation_batch_timeout elapses.
+        # Coalescing drops duplicate (identity_id, violation_type) pairs that
+        # arrive within _violation_coalesce_window — complementing the existing
+        # per-track violation cooldown which guards the detection side.
+        self._violation_buffer:          list  = []
+        self._violation_last_flush:      float = time.monotonic()
+        self._violation_batch_size:      int   = cfg["VIOLATION_BATCH_SIZE"]
+        self._violation_batch_timeout:   float = cfg["VIOLATION_BATCH_TIMEOUT_MS"] / 1000.0
+        self._violation_coalesce_window: float = cfg["VIOLATION_COALESCE_WINDOW_S"]
+        # (identity_id, violation_type) → last buffered monotonic timestamp
+        self._violation_coalesce_seen:   dict  = {}
 
     # ── Main entry point ──────────────────────────────────────────────────────
 
@@ -331,6 +345,7 @@ class StreamWorker:
             logger.error("Stream %s crashed: %s\n%s",
                          self.stream_id, exc, traceback.format_exc())
         finally:
+            self._flush_violations()   # drain buffer — no data loss on clean stop
             with _registry_lock:
                 _worker_registry.discard(self)
             if vs:
@@ -487,15 +502,17 @@ class StreamWorker:
             for viol in associated:
                 logger.debug("[stream=%s] track=%d -> violation '%s' identity=%s",
                              sid8, track.track_id, viol["class_name"], identity_id)
-                self.task_queue.put(ViolationJob(
-                    stream_id       = self.stream_id,
-                    violation_type  = viol["class_name"],
-                    confidence      = viol["confidence"],
-                    person_crop_bgr = crop.copy(),
-                    person_bbox     = bbox,
-                    identity_id     = identity_id,
-                    identity_label  = identity_label,
-                ))
+                self._buffer_violation(
+                    ViolationJob(
+                        stream_id       = self.stream_id,
+                        violation_type  = viol["class_name"],
+                        confidence      = viol["confidence"],
+                        person_crop_bgr = crop.copy(),
+                        person_bbox     = bbox,
+                        identity_id     = identity_id,
+                        identity_label  = identity_label,
+                    )
+                )
 
         self.tracker.mark_missing(active_bboxes)
 
@@ -510,6 +527,68 @@ class StreamWorker:
             fps_sample      = 0.0,   # filled by _processing_loop after timing
             violation_delta = 1 if any(not d["safe"] for d in detections) else 0,
         )
+
+    # ── Violation write buffer ────────────────────────────────────────────────
+
+    def _buffer_violation(self, job: ViolationJob) -> None:
+        """
+        Coalesce and buffer a ViolationJob.
+
+        Coalescing key: (identity_id, violation_type).
+        Jobs whose key was buffered within _violation_coalesce_window are
+        dropped — the first occurrence in the window is sufficient for the DB.
+        Unknown identity (None) uses track bbox as a tiebreaker key so that
+        distinct unidentified persons are not collapsed together.
+
+        After buffering, flushes immediately if batch size is reached.
+        """
+        now = time.monotonic()
+        coalesce_key = (
+            job.identity_id or str(job.person_bbox),
+            job.violation_type,
+        )
+        last_seen = self._violation_coalesce_seen.get(coalesce_key, 0.0)
+        if now - last_seen < self._violation_coalesce_window:
+            logger.debug(
+                "[stream=%s] violation coalesced — key=%s delta=%.2fs",
+                self.stream_id[:8], coalesce_key, now - last_seen,
+            )
+            return
+
+        self._violation_coalesce_seen[coalesce_key] = now
+        self._violation_buffer.append(job)
+
+        if len(self._violation_buffer) >= self._violation_batch_size:
+            self._flush_violations()
+
+    def _flush_violations(self) -> None:
+        """
+        Push all buffered ViolationJobs into TaskQueue and reset the buffer.
+        Called when batch size is reached OR timeout elapses in the processing
+        loop.  TaskQueue.put() is non-blocking from the caller's perspective
+        (the queue worker handles DB writes asynchronously).
+        Stale coalesce keys older than 2× the coalesce window are evicted here
+        to prevent unbounded dict growth across long-running streams.
+        """
+        if not self._violation_buffer:
+            self._violation_last_flush = time.monotonic()
+            return
+
+        for job in self._violation_buffer:
+            self.task_queue.put(job)
+
+        logger.debug(
+            "[stream=%s] violation batch flushed — %d jobs",
+            self.stream_id[:8], len(self._violation_buffer),
+        )
+        self._violation_buffer.clear()
+        now = self._violation_last_flush = time.monotonic()
+
+        # Evict stale coalesce keys — O(n keys), runs at most once per flush
+        cutoff = now - self._violation_coalesce_window * 2
+        stale  = [k for k, t in self._violation_coalesce_seen.items() if t < cutoff]
+        for k in stale:
+            del self._violation_coalesce_seen[k]
 
     # ── Adaptive skip helpers ─────────────────────────────────────────────────
 
@@ -619,6 +698,11 @@ class StreamWorker:
                 self.output_queue.put_nowait(pf)
             except queue.Full:
                 pass   # encoding loop is behind — drop, never block
+
+            # Timeout flush — ensures buffered violations are not held
+            # indefinitely when the stream is quiet (below batch size).
+            if (time.monotonic() - self._violation_last_flush) >= self._violation_batch_timeout:
+                self._flush_violations()
 
     # ── Face worker loop ──────────────────────────────────────────────────────
 

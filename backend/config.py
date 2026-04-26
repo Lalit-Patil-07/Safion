@@ -114,8 +114,13 @@ class Config:
     LOAD_LOW_THRESHOLD: float    = float(os.environ.get("LOAD_LOW_THRESHOLD", "0.3"))
     TRACK_STALE_TIMEOUT_S: float        = float(os.environ.get("TRACK_STALE_TIMEOUT_S", "30.0"))
     VIDEO_CAPTURE_BACKEND: str          = os.environ.get("VIDEO_CAPTURE_BACKEND", "OPENCV").upper()
-    EMBED_QUALITY_IMPROVE_MARGIN: float = float(os.environ.get("EMBED_QUALITY_IMPROVE_MARGIN", "0.12"))
-    IDENTITY_MIN_EMBEDDINGS_DELTA: int  = int(os.environ.get("IDENTITY_MIN_EMBEDDINGS_DELTA", "3"))
+    EMBED_QUALITY_IMPROVE_MARGIN: float  = float(os.environ.get("EMBED_QUALITY_IMPROVE_MARGIN", "0.12"))
+    IDENTITY_MIN_EMBEDDINGS_DELTA: int   = int(os.environ.get("IDENTITY_MIN_EMBEDDINGS_DELTA", "3"))
+
+    # ── Violation write batching ───────────────────────────────────────────────
+    VIOLATION_BATCH_SIZE: int        = int(os.environ.get("VIOLATION_BATCH_SIZE", "8"))
+    VIOLATION_BATCH_TIMEOUT_MS: int  = int(os.environ.get("VIOLATION_BATCH_TIMEOUT_MS", "400"))
+    VIOLATION_COALESCE_WINDOW_S: float = float(os.environ.get("VIOLATION_COALESCE_WINDOW_S", "2.0"))
 
     # ── PPE Classes (internal constant — not configurable via env) ────────────
     PPE_CLASSES: dict = {
