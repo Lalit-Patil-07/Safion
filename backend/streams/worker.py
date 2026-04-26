@@ -66,27 +66,50 @@ _worker_registry = weakref.WeakSet()
 
 # ── Frame capture thread ──────────────────────────────────────────────────────
 
+def _gstreamer_pipeline(src, fps_limit: int) -> str:
+    """
+    Build a GStreamer pipeline string for cv2.VideoCapture.
+
+    RTSP sources use rtspsrc → decodebin → videoconvert → appsink.
+    File / device sources fall back to uridecodebin / v4l2src paths.
+    appsink drop=true keeps only the latest frame and never blocks the
+    capture thread — equivalent to the latest-frame behaviour without a ring buffer.
+    """
+    caps = f"video/x-raw,framerate={fps_limit}/1"
+    sink = f"videoconvert ! appsink max-buffers=2 drop=true sync=false caps={caps}"
+
+    if isinstance(src, str) and src.startswith("rtsp://"):
+        return (
+            f"rtspsrc location={src} latency=100 ! "
+            f"rtph264depay ! h264parse ! avdec_h264 ! {sink}"
+        )
+    if isinstance(src, int):
+        return f"v4l2src device=/dev/video{src} ! {sink}"
+    # File or other URI — let GStreamer resolve it
+    return f"uridecodebin uri={src} ! {sink}"
+
+
 class VideoStream:
     """
     Dedicated capture thread.  Pushes frames into process_queue.
     Frames are dropped (put_nowait) when the queue is full so that the
     capture thread never blocks the processing thread, and the processing
     thread never blocks the capture thread.
+
+    If backend='GSTREAMER' a GStreamer appsink pipeline is used; appsink
+    drop=true replicates the latest-frame behaviour without a ring buffer.
+    On any GStreamer open failure the code retries with the default OpenCV
+    backend so a misconfigured GStreamer install never takes down a stream.
     """
 
-    def __init__(self, src, fps_limit: int = 30, process_queue: queue.Queue = None):
-        self.stream = cv2.VideoCapture(src)
-        self.stream.set(cv2.CAP_PROP_BUFFERSIZE, 2)
+    def __init__(self, src, fps_limit: int = 30, process_queue: queue.Queue = None,
+                 backend: str = "OPENCV"):
         self._interval = 1.0 / max(1, fps_limit)
         self._queue    = process_queue
         self.stopped   = False
 
-        grabbed, frame = self.stream.read()
-        if grabbed and self._queue is not None:
-            try:
-                self._queue.put_nowait(frame)
-            except queue.Full:
-                pass
+        self.stream = self._open(src, fps_limit, backend)
+        self.stream.set(cv2.CAP_PROP_BUFFERSIZE, 2)
 
     def start(self) -> "VideoStream":
         Thread(target=self._update, daemon=True, name="vs-capture").start()
@@ -110,6 +133,28 @@ class VideoStream:
         time.sleep(0.1)
         if self.stream.isOpened():
             self.stream.release()
+
+    @staticmethod
+    def _open(src, fps_limit: int, backend: str) -> cv2.VideoCapture:
+        """
+        Open VideoCapture with the requested backend.
+        Falls back to the default OpenCV backend on any GStreamer failure so
+        a misconfigured GStreamer install never takes down a stream.
+        """
+        if backend == "GSTREAMER":
+            pipeline = _gstreamer_pipeline(src, fps_limit)
+            cap = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
+            if cap.isOpened():
+                logger.info("VideoStream: GStreamer backend opened (%s…)", pipeline[:60])
+                return cap
+            logger.warning(
+                "VideoStream: GStreamer failed to open '%s' — falling back to OpenCV backend.",
+                src,
+            )
+            cap.release()
+        cap = cv2.VideoCapture(src)
+        logger.info("VideoStream: OpenCV backend opened for '%s'.", src)
+        return cap
 
 
 # ── Annotation helper ─────────────────────────────────────────────────────────
@@ -252,6 +297,7 @@ class StreamWorker:
                 src=src,
                 fps_limit=self.fps_limit,
                 process_queue=self.process_queue,
+                backend=self.app.config["VIDEO_CAPTURE_BACKEND"],
             ).start()
             time.sleep(0.5)
 
