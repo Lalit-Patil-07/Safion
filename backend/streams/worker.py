@@ -910,7 +910,8 @@ class StreamWorker:
                             )
             except Exception as exc:
                 import traceback
-                logger.error("Face worker error: %s\n%s", exc, traceback.format_exc())
+                logger.error("[stream=%s] face_worker_loop error: %s\n%s",
+                             sid8, exc, traceback.format_exc())
                 continue
 
     # ── Encoding loop ─────────────────────────────────────────────────────────
