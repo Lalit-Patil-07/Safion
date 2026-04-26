@@ -107,9 +107,20 @@ class VideoStream:
         self._interval = 1.0 / max(1, fps_limit)
         self._queue    = process_queue
         self.stopped   = False
+        self.last_frame_time:      float = time.monotonic()
+        self.consecutive_failures: int   = 0
 
         self.stream = self._open(src, fps_limit, backend)
         self.stream.set(cv2.CAP_PROP_BUFFERSIZE, 2)
+
+        grabbed, frame = self.stream.read()
+        if grabbed and self._queue is not None:
+            self.last_frame_time      = time.monotonic()
+            self.consecutive_failures = 0
+            try:
+                self._queue.put_nowait(frame)
+            except queue.Full:
+                pass
 
     def start(self) -> "VideoStream":
         Thread(target=self._update, daemon=True, name="vs-capture").start()
@@ -118,12 +129,22 @@ class VideoStream:
     def _update(self) -> None:
         while not self.stopped:
             t0 = time.monotonic()
-            grabbed, frame = self.stream.read()
+            try:
+                grabbed, frame = self.stream.read()
+            except Exception as exc:
+                logger.warning("VideoStream read() exception: %s", exc)
+                grabbed = False
+                frame   = None
+
             if grabbed and self._queue is not None:
+                self.last_frame_time      = time.monotonic()
+                self.consecutive_failures = 0
                 try:
                     self._queue.put_nowait(frame)
                 except queue.Full:
                     pass   # processing is behind — drop frame, never block
+            else:
+                self.consecutive_failures += 1
             sleep = self._interval - (time.monotonic() - t0)
             if sleep > 0:
                 time.sleep(sleep)
@@ -301,51 +322,66 @@ class StreamWorker:
         # (identity_id, violation_type) → last buffered monotonic timestamp
         self._violation_coalesce_seen:   dict  = {}
 
+        # ── Stream restart and stall detection ───────────────────────────────────
+        self._stall_timeout:   float = cfg["STREAM_STALL_TIMEOUT_S"]
+        self._restart_delay:   float = cfg["STREAM_RESTART_DELAY_S"]
+
     # ── Main entry point ──────────────────────────────────────────────────────
 
     def run(self) -> None:
+        import traceback
+        src = int(self.source_path) if self.source_type == "webcam" else self.source_path
         vs: Optional[VideoStream] = None
+
         try:
-            src = int(self.source_path) if self.source_type == "webcam" else self.source_path
-            vs  = VideoStream(
-                src=src,
-                fps_limit=self.fps_limit,
-                process_queue=self.process_queue,
-                backend=self.app.config["VIDEO_CAPTURE_BACKEND"],
-            ).start()
-            time.sleep(0.5)
+            Thread(target=self._encoding_loop, daemon=True,
+                   name=f"enc-{self.stream_id[:8]}").start()
+            Thread(target=self._face_worker_loop, daemon=True,
+                   name=f"face-{self.stream_id[:8]}").start()
 
-            if not vs.stream.isOpened():
-                logger.error("Cannot open source: %s", src)
-                return
-
-            logger.info("Stream %s started (%s).", self.stream_id, src)
-
+            # ✅ REGISTER ONCE (CORRECT PLACEMENT)
             with _registry_lock:
                 _worker_registry.add(self)
 
-            # Encoding loop: annotation + JPEG encode; never stalls YOLO.
-            Thread(
-                target=self._encoding_loop,
-                daemon=True,
-                name=f"enc-{self.stream_id[:8]}",
-            ).start()
+            while not self.stop_event.is_set():
 
-            # Face worker: embed_crop + identity assignment; never stalls YOLO.
-            Thread(
-                target=self._face_worker_loop,
-                daemon=True,
-                name=f"face-{self.stream_id[:8]}",
-            ).start()
+                if vs is not None:
+                    vs.stop()
 
-            self._processing_loop()
+                try:
+                    vs = VideoStream(
+                        src=src,
+                        fps_limit=self.fps_limit,
+                        process_queue=self.process_queue,
+                        backend=self.app.config["VIDEO_CAPTURE_BACKEND"],
+                    ).start()
+                    time.sleep(0.5)
+                except Exception as exc:
+                    logger.error("Stream %s open failed: %s — retry in %.1fs",
+                                 self.stream_id, exc, self._restart_delay)
+                    time.sleep(self._restart_delay)
+                    continue
+
+                if not vs.stream.isOpened():
+                    logger.error("Stream %s cannot open source — retry in %.1fs",
+                                 self.stream_id, self._restart_delay)
+                    time.sleep(self._restart_delay)
+                    continue
+
+                logger.info("Stream %s started.", self.stream_id)
+
+                self._run_with_stall_watch(vs)
+
+                if not self.stop_event.is_set():
+                    logger.warning("Stream %s restarting — delay %.1fs",
+                                   self.stream_id, self._restart_delay)
+                    time.sleep(self._restart_delay)
 
         except Exception as exc:
-            import traceback
-            logger.error("Stream %s crashed: %s\n%s",
+            logger.error("Stream %s fatal error: %s\n%s",
                          self.stream_id, exc, traceback.format_exc())
         finally:
-            self._flush_violations()   # drain buffer — no data loss on clean stop
+            self._flush_violations()
             with _registry_lock:
                 _worker_registry.discard(self)
             if vs:
@@ -635,6 +671,50 @@ class StreamWorker:
             return 1
         return 0
 
+    def _run_with_stall_watch(self, vs: "VideoStream") -> None:
+        import traceback
+        sid8 = self.stream_id[:8]
+
+        while not self.stop_event.is_set():
+
+            stall_age = time.monotonic() - vs.last_frame_time
+            if stall_age > self._stall_timeout:
+                logger.error("[stream=%s] stall detected (%.1fs)",
+                             sid8, stall_age)
+                return
+
+            try:
+                frame = self.process_queue.get(timeout=0.2)
+            except queue.Empty:
+                continue
+
+            self._adapt_skip()
+            priority = self._frame_priority()
+
+            if priority == 2:
+                effective_skip = 0
+            elif priority == 1:
+                effective_skip = self._current_skip // 2
+            else:
+                effective_skip = self._current_skip
+
+            if self._skip_counter < effective_skip:
+                self._skip_counter += 1
+                continue
+            self._skip_counter = 0
+
+            try:
+                pf = self._process_frame(frame)
+            except Exception as exc:
+                logger.error("[stream=%s] process error: %s\n%s",
+                             sid8, exc, traceback.format_exc())
+                continue
+
+            try:
+                self.output_queue.put_nowait(pf)
+            except queue.Full:
+                pass
+
     # ── Processing loop ───────────────────────────────────────────────────────
 
     def _processing_loop(self) -> None:
@@ -728,105 +808,110 @@ class StreamWorker:
             except queue.Empty:
                 continue
 
-            # ── Embedding (blocking InsightFace call — isolated here) ──────────
-            with self.app.app_context():
-                faces = self.pipeline.embed_crop(job.crop)
-
-            now_mono = time.monotonic()
-
-            if not faces:
-                # Record the attempt so the cooldown timer advances correctly.
-                with job.track.lock:
-                    job.track.last_identity_check = now_mono
-                continue
-
-            best = max(faces, key=lambda f: f["quality_score"])
-
-            # ── Quality gate + embedding update (under lock) ──────────────────
-            should_assign  = False
-            embs_copy:  list = []
-            quals_copy: list = []
-
-            with job.track.lock:
-                avg_quality = (
-                    sum(job.track.pending_quality) / len(job.track.pending_quality)
-                    if job.track.pending_quality else 0.0
-                )
-                few_embeddings = job.track.n_embeddings < 3
-                # Stable identified tracks require a meaningful quality improvement
-                # (EMBED_QUALITY_IMPROVE_MARGIN above average) to accept a new
-                # embedding — marginal frames don't move the prototype much and
-                # trigger unnecessary DB writes downstream.
-                # Unidentified tracks and low-count tracks use the relaxed gate.
-                stable = (
-                    job.track.identity_id is not None
-                    and job.track.last_match_confidence >= self._strong_match_threshold
-                )
-                if stable and not few_embeddings:
-                    quality_ok = best["quality_score"] > avg_quality * (1.0 + self._quality_improve_margin)
-                else:
-                    quality_ok = best["quality_score"] > avg_quality or few_embeddings
-
-                if quality_ok:
-                    # deque(maxlen=MAX_PENDING_EMBEDDINGS) evicts oldest automatically —
-                    # no manual cap or O(n) pop(0) needed.
-                    job.track.add_embedding(best["embedding"], best["quality_score"])
-                    logger.debug(
-                        "[stream=%s] track=%d embedding added quality=%.3f n_embs=%d",
-                        sid8, job.track.track_id, best["quality_score"], job.track.n_embeddings,
-                    )
-                else:
-                    logger.debug(
-                        "[stream=%s] track=%d embedding skipped — quality %.3f <= avg %.3f",
-                        sid8, job.track.track_id, best["quality_score"], avg_quality,
-                    )
-
-                job.track.last_identity_check = now_mono
-
-                if job.has_violation and job.track.identity_id is not None:
-                    logger.debug("[stream=%s] track=%d identity recheck triggered",
-                                 sid8, job.track.track_id)
-
-                # Check whether this track is ready for identity assignment.
-                # frames_seen is written only by the processing loop (safe to
-                # read without lock), but n_embeddings reads pending_embeddings
-                # which we own under lock — call is_confirmed() here.
-                if (
-                    self.tracker.is_confirmed(job.track)
-                    and job.track.identity_id is None
-                    and job.track.pending_embeddings
-                ):
-                    should_assign = True
-                    embs_copy  = list(job.track.pending_embeddings)
-                    quals_copy = list(job.track.pending_quality)
-
-            # ── Identity assignment — DB I/O outside lock ─────────────────────
-            if should_assign:
-                logger.debug("[stream=%s] track=%d confirmed — matching identity",
-                             sid8, job.track.track_id)
+            try:
+                # ── Embedding (blocking InsightFace call — isolated here) ──────────
                 with self.app.app_context():
-                    identity_id, label, score = self.pipeline.match_and_store_track(
-                        embs_copy, quals_copy,
-                        stream_id=self.stream_id,
-                    )
+                    faces = self.pipeline.embed_crop(job.crop)
+
+                now_mono = time.monotonic()
+
+                if not faces:
+                    # Record the attempt so the cooldown timer advances correctly.
+                    with job.track.lock:
+                        job.track.last_identity_check = now_mono
+                    continue
+
+                best = max(faces, key=lambda f: f["quality_score"])
+
+                # ── Quality gate + embedding update (under lock) ──────────────────
+                should_assign  = False
+                embs_copy:  list = []
+                quals_copy: list = []
+
                 with job.track.lock:
-                    # Guard: another job may have raced and already assigned an
-                    # identity (e.g. two violation frames queued back-to-back).
-                    # First writer wins.
-                    if job.track.identity_id is None:
-                        job.track.identity_id             = identity_id
-                        job.track.identity_label          = label
-                        job.track.last_match_confidence   = score
-                        job.track.embeddings_at_last_match = job.track.n_embeddings
+                    avg_quality = (
+                        sum(job.track.pending_quality) / len(job.track.pending_quality)
+                        if job.track.pending_quality else 0.0
+                    )
+                    few_embeddings = job.track.n_embeddings < 3
+                    # Stable identified tracks require a meaningful quality improvement
+                    # (EMBED_QUALITY_IMPROVE_MARGIN above average) to accept a new
+                    # embedding — marginal frames don't move the prototype much and
+                    # trigger unnecessary DB writes downstream.
+                    # Unidentified tracks and low-count tracks use the relaxed gate.
+                    stable = (
+                        job.track.identity_id is not None
+                        and job.track.last_match_confidence >= self._strong_match_threshold
+                    )
+                    if stable and not few_embeddings:
+                        quality_ok = best["quality_score"] > avg_quality * (1.0 + self._quality_improve_margin)
+                    else:
+                        quality_ok = best["quality_score"] > avg_quality or few_embeddings
+
+                    if quality_ok:
+                        # deque(maxlen=MAX_PENDING_EMBEDDINGS) evicts oldest automatically —
+                        # no manual cap or O(n) pop(0) needed.
+                        job.track.add_embedding(best["embedding"], best["quality_score"])
                         logger.debug(
-                            "[stream=%s] track=%d -> '%s' (score=%.3f)",
-                            sid8, job.track.track_id, label, score,
+                            "[stream=%s] track=%d embedding added quality=%.3f n_embs=%d",
+                            sid8, job.track.track_id, best["quality_score"], job.track.n_embeddings,
                         )
                     else:
                         logger.debug(
-                            "[stream=%s] track=%d identity already assigned — skipping race result",
-                            sid8, job.track.track_id,
+                            "[stream=%s] track=%d embedding skipped — quality %.3f <= avg %.3f",
+                            sid8, job.track.track_id, best["quality_score"], avg_quality,
                         )
+
+                    job.track.last_identity_check = now_mono
+
+                    if job.has_violation and job.track.identity_id is not None:
+                        logger.debug("[stream=%s] track=%d identity recheck triggered",
+                                     sid8, job.track.track_id)
+
+                    # Check whether this track is ready for identity assignment.
+                    # frames_seen is written only by the processing loop (safe to
+                    # read without lock), but n_embeddings reads pending_embeddings
+                    # which we own under lock — call is_confirmed() here.
+                    if (
+                        self.tracker.is_confirmed(job.track)
+                        and job.track.identity_id is None
+                        and job.track.pending_embeddings
+                    ):
+                        should_assign = True
+                        embs_copy  = list(job.track.pending_embeddings)
+                        quals_copy = list(job.track.pending_quality)
+
+                # ── Identity assignment — DB I/O outside lock ─────────────────────
+                if should_assign:
+                    logger.debug("[stream=%s] track=%d confirmed — matching identity",
+                                 sid8, job.track.track_id)
+                    with self.app.app_context():
+                        identity_id, label, score = self.pipeline.match_and_store_track(
+                            embs_copy, quals_copy,
+                            stream_id=self.stream_id,
+                        )
+                    with job.track.lock:
+                        # Guard: another job may have raced and already assigned an
+                        # identity (e.g. two violation frames queued back-to-back).
+                        # First writer wins.
+                        if job.track.identity_id is None:
+                            job.track.identity_id             = identity_id
+                            job.track.identity_label          = label
+                            job.track.last_match_confidence   = score
+                            job.track.embeddings_at_last_match = job.track.n_embeddings
+                            logger.debug(
+                                "[stream=%s] track=%d -> '%s' (score=%.3f)",
+                                sid8, job.track.track_id, label, score,
+                            )
+                        else:
+                            logger.debug(
+                                "[stream=%s] track=%d identity already assigned — skipping race result",
+                                sid8, job.track.track_id,
+                            )
+            except Exception as exc:
+                import traceback
+                logger.error("Face worker error: %s\n%s", exc, traceback.format_exc())
+                continue
 
     # ── Encoding loop ─────────────────────────────────────────────────────────
 
@@ -844,28 +929,33 @@ class StreamWorker:
             except queue.Empty:
                 continue
 
-            enc_count += 1
-            encode_this_frame = (enc_count % self.encode_every_n == 0)
+            try:
+                enc_count += 1
+                encode_this_frame = (enc_count % self.encode_every_n == 0)
 
-            with self.store_lock:
-                if self.stream_id in self.stream_store:
-                    stats = self.stream_store[self.stream_id]["stats"]
-                    stats["fps"]             = pf.fps_sample
-                    stats["frame_count"]     = pf.frame_count
-                    stats["violation_count"] = (
-                        stats.get("violation_count", 0) + pf.violation_delta
-                    )
-                    stats["last_detections"] = pf.detections
-                    stats["resolution"]      = [pf.orig_w, pf.orig_h]
-
-                    if encode_this_frame:
-                        _annotate(pf.frame, pf.detections)
-                        ret, buf = cv2.imencode(
-                            ".jpg", pf.frame,
-                            [int(cv2.IMWRITE_JPEG_QUALITY), self.jpeg_quality],
+                with self.store_lock:
+                    if self.stream_id in self.stream_store:
+                        stats = self.stream_store[self.stream_id]["stats"]
+                        stats["fps"]             = pf.fps_sample
+                        stats["frame_count"]     = pf.frame_count
+                        stats["violation_count"] = (
+                            stats.get("violation_count", 0) + pf.violation_delta
                         )
-                        if ret:
-                            self.stream_store[self.stream_id]["frame"] = buf.tobytes()
+                        stats["last_detections"] = pf.detections
+                        stats["resolution"]      = [pf.orig_w, pf.orig_h]
+
+                        if encode_this_frame:
+                            _annotate(pf.frame, pf.detections)
+                            ret, buf = cv2.imencode(
+                                ".jpg", pf.frame,
+                                [int(cv2.IMWRITE_JPEG_QUALITY), self.jpeg_quality],
+                            )
+                            if ret:
+                                self.stream_store[self.stream_id]["frame"] = buf.tobytes()
+            except Exception as exc:
+                import traceback
+                logger.error("Encoding loop error: %s\n%s", exc, traceback.format_exc())
+                continue
 
 
 # ── Entry point (StreamManager interface — unchanged) ─────────────────────────

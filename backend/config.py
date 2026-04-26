@@ -122,6 +122,10 @@ class Config:
     VIOLATION_BATCH_TIMEOUT_MS: int  = int(os.environ.get("VIOLATION_BATCH_TIMEOUT_MS", "400"))
     VIOLATION_COALESCE_WINDOW_S: float = float(os.environ.get("VIOLATION_COALESCE_WINDOW_S", "2.0"))
 
+    # ── Stream restart and stall detection ─────────────────────────────────────
+    STREAM_STALL_TIMEOUT_S: float       = float(os.environ.get("STREAM_STALL_TIMEOUT_S", "10.0"))
+    STREAM_RESTART_DELAY_S: float       = float(os.environ.get("STREAM_RESTART_DELAY_S", "3.0"))
+
     # ── PPE Classes (internal constant — not configurable via env) ────────────
     PPE_CLASSES: dict = {
         0: {"name": "Hardhat",        "color": "#3B82F6", "safe": True},
