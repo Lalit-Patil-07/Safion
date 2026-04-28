@@ -1,12 +1,14 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import ViolationLogPage from "./ViolationLogPage";
+import { useAuth } from './auth/AuthContext';
+import LoginPage from './auth/LoginPage';
 import {
   Camera, Upload, Video, CheckCircle, XCircle, Settings,
   Play, StopCircle, Loader, Shield, ShieldOff, ShieldCheck,
   X, Tv, Plus, Trash2, Maximize, Minimize, Users, ChevronLeft,
   ChevronRight, Search, GitMerge, Edit3, Clock, Activity,
   BarChart2, Eye, Check, AlertTriangle, RefreshCw, Inbox,
-  Star, TrendingUp, Filter, Zap, Link2
+  Star, TrendingUp, Filter, Zap, Link2, LogOut
 } from 'lucide-react';
 
 const API = '';
@@ -89,7 +91,7 @@ const NAV = [
   { id: 'settings',    icon: Settings,     label: 'Settings' },
 ];
 
-const Sidebar = ({ view, setView, open, setOpen, serverStatus, reviewCount, suggestionsCount }) => (
+const Sidebar = ({ view, setView, open, setOpen, serverStatus, reviewCount, suggestionsCount, user, onLogout }) => (
   <>
     {open && <div className="fixed inset-0 bg-black/50 z-40 lg:hidden" onClick={() => setOpen(false)} />}
     <aside className={`fixed top-0 left-0 h-full bg-card-secondary border-r border-border z-50 transition-all duration-300
@@ -137,12 +139,12 @@ const Sidebar = ({ view, setView, open, setOpen, serverStatus, reviewCount, sugg
           ))}
         </nav>
 
-        <div className="p-3 border-t border-border">
+        <div className="p-3 border-t border-border space-y-1">
           <div className={`flex items-center gap-3 px-3 py-2 ${open ? '' : 'justify-center'}`}>
             <div className={`w-2 h-2 rounded-full flex-shrink-0
               ${serverStatus === 'connected' ? 'bg-green-500' : serverStatus === 'degraded' ? 'bg-amber-500' : 'bg-red-500'}`} />
             {open && (
-              <div>
+              <div className="flex-1 min-w-0">
                 <div className="text-xs text-text-secondary">Server</div>
                 <div className={`text-xs font-semibold capitalize
                   ${serverStatus === 'connected' ? 'text-green-500' : serverStatus === 'degraded' ? 'text-amber-500' : 'text-red-500'}`}>
@@ -151,6 +153,15 @@ const Sidebar = ({ view, setView, open, setOpen, serverStatus, reviewCount, sugg
               </div>
             )}
           </div>
+          <button
+            onClick={onLogout}
+            title={!open ? 'Sign out' : ''}
+            className={`w-full flex items-center gap-3 px-3 py-2 rounded-md text-xs font-medium
+                        text-text-secondary hover:bg-border hover:text-red-400 transition-all
+                        ${open ? 'justify-start' : 'justify-center'}`}>
+            <LogOut size={14} className="flex-shrink-0" />
+            {open && <span>{user?.username || 'Sign out'}</span>}
+          </button>
         </div>
       </div>
     </aside>
@@ -1056,6 +1067,7 @@ const SettingsPage = ({ rtspStreams, setRtspStreams, startStream, serverStatus }
 
 // ── App root ──────────────────────────────────────────────────────────────────
 export default function App() {
+  const { isAuthenticated, user, logout } = useAuth();
   const [view, setView]           = useState('dashboard');
   const [serverStatus, setServerStatus] = useState('checking');
   const [sidebarOpen, setSidebarOpen]   = useState(true);
@@ -1172,11 +1184,14 @@ export default function App() {
     }
   };
 
+  if (!isAuthenticated) return <LoginPage />;
+
   return (
     <div className="min-h-screen bg-background text-text font-sans flex">
       <ImageModal imageUrl={modalImage} onClose={() => setModalImage(null)} />
       <Sidebar view={view} setView={setView} open={sidebarOpen} setOpen={setSidebarOpen}
-               serverStatus={serverStatus} reviewCount={reviewCount} suggestionsCount={suggestionsCount} />
+               serverStatus={serverStatus} reviewCount={reviewCount} suggestionsCount={suggestionsCount}
+               user={user} onLogout={logout} />
       <main className={`flex-1 h-screen overflow-y-auto transition-all duration-300 ${sidebarOpen ? 'lg:ml-56' : 'lg:ml-16'}`}>
         {renderPage()}
       </main>
