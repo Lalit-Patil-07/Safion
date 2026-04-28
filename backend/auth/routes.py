@@ -1,3 +1,5 @@
+import re
+
 from flask import Blueprint, request, jsonify, current_app
 from flask_jwt_extended import (
     create_access_token,
@@ -15,7 +17,6 @@ auth_bp = Blueprint("auth", __name__, url_prefix="/api/v1/auth")
 
 def _validate_registration_payload(data: dict) -> str | None:
     """Return an error string if the payload is invalid, else None."""
-    import re
     username = (data.get("username") or "").strip()
     email    = (data.get("email")    or "").strip().lower()
     password = data.get("password") or ""

@@ -12,10 +12,9 @@ from sqlalchemy import func
 
 from extensions import db
 from face.models import FaceIdentity, FaceEmbedding, Violation
+from middleware.auth_required import protect_blueprint
 
 face_bp = Blueprint("face", __name__, url_prefix="/face")
-
-from middleware.auth_required import protect_blueprint
 protect_blueprint(face_bp)
 
 
