@@ -58,18 +58,6 @@ def _db_ready() -> bool:
         return False
 
 
-def _run_migrations():
-    from alembic import command
-    from alembic.config import Config
-    import os
-
-    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    ALEMBIC_INI = os.path.join(BASE_DIR, "alembic.ini")
-
-    cfg = Config(ALEMBIC_INI)
-    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    cfg.set_main_option("script_location", os.path.join(BASE_DIR, "migrations"))
-    command.upgrade(cfg, "head")
 
 def _run_setup() -> None:
     """
@@ -109,8 +97,18 @@ if __name__ == "__main__":
             )
             sys.exit(1)
 
-    _run_migrations()
-
     from app import create_app
-    app = create_app()
+    from extensions import db
+    from auth.utils import ensure_admin_user
+
+    app = create_app(config_overrides={"_SKIP_SERVICES": True})
+
+    with app.app_context():
+        db.create_all()
+
+    ensure_admin_user(app)
+
+    from app import _init_services
+    _init_services(app)
+
     app.run(host="0.0.0.0", port=5000, debug=False, threaded=True)

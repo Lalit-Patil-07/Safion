@@ -13,13 +13,15 @@ from extensions import db, bcrypt, jwt
 from version import __version__, VERSION_STRING
 
 
-def create_app(config_class=Config) -> Flask:
+def create_app(config_class=Config, config_overrides=None) -> Flask:
     app = Flask(
         __name__,
         static_folder=os.path.join(os.path.dirname(__file__), "..", "frontend", "build"),
         static_url_path="/",
     )
     app.config.from_object(config_class)
+    if config_overrides:
+        app.config.update(config_overrides)
 
     _configure_logging(app)
     _init_extensions(app)
@@ -31,8 +33,6 @@ def create_app(config_class=Config) -> Flask:
 
     if not app.config.get("_SKIP_SERVICES", False):
         _init_services(app)
-
-    _ensure_admin(app)
 
     return app
 
