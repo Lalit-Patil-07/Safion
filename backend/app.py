@@ -62,7 +62,7 @@ def _init_extensions(app):
 
     with app.app_context():
         import auth.models   # noqa: F401
-        import face.models   # noqa: F401
+        import face.models   # noqa: F401   ← registers StreamEvent with SQLAlchemy metadata
 
         db.session.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         db.session.commit()
