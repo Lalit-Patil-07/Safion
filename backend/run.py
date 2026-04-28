@@ -89,8 +89,6 @@ if __name__ == "__main__":
     # Load .env before anything else so Config._require() finds all variables.
     _load_dotenv()
 
-    _run_migrations()
-
     # Auto-setup: only runs if the DB is unreachable or vector extension is missing.
     # On every normal start this is a single connection + one query (< 5 ms).
     if not _db_ready():
@@ -103,6 +101,8 @@ if __name__ == "__main__":
                 file=sys.stderr,
             )
             sys.exit(1)
+
+    _run_migrations()
 
     from app import create_app
     app = create_app()

@@ -3,9 +3,11 @@ import sys
 from alembic import context
 from sqlalchemy import create_engine, pool, text
 
-_here = os.path.dirname(os.path.abspath(__file__))
-_backend = os.path.dirname(_here)
-sys.path.insert(0, _backend)
+_project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_backend_path = os.path.join(_project_root, "backend")
+
+if _backend_path not in sys.path:
+    sys.path.insert(0, _backend_path)
 
 from extensions import db
 import auth.models
