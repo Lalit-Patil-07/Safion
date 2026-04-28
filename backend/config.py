@@ -33,9 +33,16 @@ class Config:
     }
 
     # ── JWT ───────────────────────────────────────────────────────────────────
-    JWT_SECRET_KEY: str                  = _require("JWT_SECRET_KEY")
-    JWT_ACCESS_TOKEN_EXPIRES: timedelta  = timedelta(hours=int(_require("JWT_ACCESS_HOURS")))
-    JWT_REFRESH_TOKEN_EXPIRES: timedelta = timedelta(days=int(_require("JWT_REFRESH_DAYS")))
+    JWT_SECRET_KEY: str = _require("JWT_SECRET_KEY")
+    _access_hours       = int(os.environ.get("JWT_ACCESS_HOURS",   "0"))
+    _access_minutes     = int(os.environ.get("JWT_ACCESS_MINUTES", "15"))
+    JWT_ACCESS_TOKEN_EXPIRES: timedelta = (
+        timedelta(hours=_access_hours) if _access_hours > 0
+        else timedelta(minutes=_access_minutes)
+    )
+    JWT_REFRESH_TOKEN_EXPIRES: timedelta = timedelta(
+        days=int(os.environ.get("JWT_REFRESH_DAYS", "7"))
+    )
     JWT_ALGORITHM: str                   = "HS256"
 
     # ── File Storage ──────────────────────────────────────────────────────────

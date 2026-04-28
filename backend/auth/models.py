@@ -8,7 +8,8 @@ class User(db.Model):
     __table_args__ = {"extend_existing": True}
 
     id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    username = db.Column(db.String(80), unique=True, nullable=False, index=True)
+    username      = db.Column(db.String(80),  unique=True, nullable=False, index=True)
+    email         = db.Column(db.String(254), unique=True, nullable=True,  index=True)
     password_hash = db.Column(db.Text, nullable=False)
     role = db.Column(db.String(20), nullable=False, default="operator")
     # roles: "admin" | "operator"
@@ -21,11 +22,12 @@ class User(db.Model):
 
     def to_dict(self) -> dict:
         return {
-            "id": self.id,
-            "username": self.username,
-            "role": self.role,
+            "id":         self.id,
+            "username":   self.username,
+            "email":      self.email,
+            "role":       self.role,
             "created_at": self.created_at.isoformat(),
-            "is_active": self.is_active,
+            "is_active":  self.is_active,
         }
 
     def __repr__(self) -> str:

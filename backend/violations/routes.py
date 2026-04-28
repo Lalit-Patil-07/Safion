@@ -7,6 +7,11 @@ from face.models import Violation
 
 violations_bp = Blueprint("violations", __name__, url_prefix="/violations")
 
+from middleware.auth_required import protect_blueprint
+# Image files are exempted so <img> tags in the frontend can load without
+# the Authorization header constraint.
+protect_blueprint(violations_bp, exempt_endpoints={"violations.get_violation_image"})
+
 
 @violations_bp.get("")
 def get_violations():

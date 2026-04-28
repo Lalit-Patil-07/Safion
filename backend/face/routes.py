@@ -15,6 +15,9 @@ from face.models import FaceIdentity, FaceEmbedding, Violation
 
 face_bp = Blueprint("face", __name__, url_prefix="/face")
 
+from middleware.auth_required import protect_blueprint
+protect_blueprint(face_bp)
+
 
 def _pipeline():
     return current_app.extensions["face_pipeline"]

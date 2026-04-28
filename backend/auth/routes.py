@@ -6,21 +6,26 @@ from flask_jwt_extended import (
     get_jwt_identity,
     get_jwt,
 )
-from extensions import db, bcrypt
+from extensions import db
 from auth.models import User
+from auth.utils import hash_password, verify_password
 
 auth_bp = Blueprint("auth", __name__, url_prefix="/api/v1/auth")
 
 
 def _validate_registration_payload(data: dict) -> str | None:
     """Return an error string if the payload is invalid, else None."""
+    import re
     username = (data.get("username") or "").strip()
+    email    = (data.get("email")    or "").strip().lower()
     password = data.get("password") or ""
 
     if not username:
         return "Username is required."
     if len(username) < 3 or len(username) > 80:
         return "Username must be between 3 and 80 characters."
+    if email and not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
+        return "Invalid email address."
     if not password:
         return "Password is required."
     if len(password) < 8:
@@ -46,8 +51,15 @@ def register():
     if User.query.count() == 0:
         role = "admin"
 
-    password_hash = bcrypt.generate_password_hash(data["password"]).decode("utf-8")
-    user = User(username=username, password_hash=password_hash, role=role)
+    email = (data.get("email") or "").strip().lower() or None
+    if email and User.query.filter_by(email=email).first():
+        return jsonify({"error": "Email already registered."}), 409
+    user = User(
+        username=username,
+        email=email,
+        password_hash=hash_password(data["password"]),
+        role=role,
+    )
     db.session.add(user)
     db.session.commit()
 
@@ -57,16 +69,23 @@ def register():
 @auth_bp.post("/login")
 def login():
     data = request.get_json(silent=True) or {}
-    username = (data.get("username") or "").strip()
-    password = data.get("password") or ""
+    identifier = (data.get("email") or data.get("username") or "").strip()
+    password   =  data.get("password") or ""
 
-    if not username or not password:
-        return jsonify({"error": "Username and password are required."}), 400
+    if not identifier or not password:
+        return jsonify({"error": "Credentials are required."}), 400
 
-    user: User | None = User.query.filter_by(username=username, is_active=True).first()
+    user: User | None = (
+        User.query
+        .filter_by(is_active=True)
+        .filter(
+            (User.email    == identifier.lower()) |
+            (User.username == identifier)
+        )
+        .first()
+    )
 
-    if not user or not bcrypt.check_password_hash(user.password_hash, password):
-        # Deliberately vague — don't reveal whether the username exists
+    if not user or not verify_password(password, user.password_hash):
         return jsonify({"error": "Invalid credentials."}), 401
 
     additional_claims = {"role": user.role, "username": user.username}

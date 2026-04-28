@@ -5,6 +5,10 @@ from flask import Blueprint, request, jsonify, Response, current_app
 
 stream_bp = Blueprint("streams", __name__, url_prefix="/stream")
 
+from middleware.auth_required import protect_blueprint
+# video_feed is exempted — browsers cannot send Authorization headers on <img> src requests.
+protect_blueprint(stream_bp, exempt_endpoints={"streams.video_feed"})
+
 
 def _manager():
     return current_app.extensions["stream_manager"]
