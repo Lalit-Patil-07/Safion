@@ -55,7 +55,6 @@ numpy>=1.26.0
 # See scripts/install_postgres.sh for system-level installation.
 psycopg2-binary>=2.9.0
 pgvector>=0.2.0
-alembic>=1.13.0
 
 # WSGI server (production)
 gunicorn>=21.2.0

@@ -61,7 +61,14 @@ def _db_ready() -> bool:
 def _run_migrations():
     from alembic import command
     from alembic.config import Config
-    cfg = Config("alembic.ini")
+    import os
+
+    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    ALEMBIC_INI = os.path.join(BASE_DIR, "alembic.ini")
+
+    cfg = Config(ALEMBIC_INI)
+    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    cfg.set_main_option("script_location", os.path.join(BASE_DIR, "migrations"))
     command.upgrade(cfg, "head")
 
 def _run_setup() -> None:
