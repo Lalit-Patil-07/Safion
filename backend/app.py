@@ -64,12 +64,8 @@ def _init_extensions(app):
         import auth.models   # noqa: F401
         import face.models   # noqa: F401
 
-        # Enable pgvector extension before creating tables.
-        # Safe to run on every startup — IF NOT EXISTS is a no-op.
         db.session.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         db.session.commit()
-
-        db.create_all()
 
 
 def _create_directories(app):

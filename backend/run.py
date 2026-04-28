@@ -58,6 +58,12 @@ def _db_ready() -> bool:
         return False
 
 
+def _run_migrations():
+    from alembic import command
+    from alembic.config import Config
+    cfg = Config("alembic.ini")
+    command.upgrade(cfg, "head")
+
 def _run_setup() -> None:
     """
     Locate and run scripts/setup_db.sh.
@@ -82,6 +88,8 @@ def _run_setup() -> None:
 if __name__ == "__main__":
     # Load .env before anything else so Config._require() finds all variables.
     _load_dotenv()
+
+    _run_migrations()
 
     # Auto-setup: only runs if the DB is unreachable or vector extension is missing.
     # On every normal start this is a single connection + one query (< 5 ms).
