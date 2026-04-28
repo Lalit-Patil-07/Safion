@@ -32,6 +32,8 @@ def create_app(config_class=Config) -> Flask:
     if not app.config.get("_SKIP_SERVICES", False):
         _init_services(app)
 
+    _ensure_admin(app)
+
     return app
 
 
@@ -196,3 +198,8 @@ def _init_services(app):
 
     import atexit
     atexit.register(lambda: (stream_manager.stop_all(), task_queue.shutdown(), batcher.shutdown()))
+
+
+def _ensure_admin(app):
+    from auth.utils import ensure_admin_user
+    ensure_admin_user(app)
