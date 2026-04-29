@@ -4,6 +4,8 @@ Prefix: /face
 """
 import os
 from datetime import datetime, timezone, timedelta
+import logging
+logger = logging.getLogger(__name__)
 
 import cv2
 import numpy as np
@@ -465,43 +467,48 @@ def get_identity_samples(identity_id: str):
     ]), 200
 
 
-# ── Cross-identity similarity ─────────────────────────────────────────────────
-@face_bp.get("/identity/<identity_id>/similarity")
-def get_identity_similarity(identity_id: str):
-    """
-    Return the top-N most similar identities to the given one.
-    Useful for the detail panel 'Similar to' section.
+@face_bp.post("/import")
+def import_identities():
+    from face.importer import run_import
 
-    Query params:
-        limit (int, default 5)
-    """
-    from face.similarity import identity_similarity
+    if "file" not in request.files:
+        return jsonify({"error": "Multipart field 'file' is required."}), 400
 
-    limit    = request.args.get("limit", 5, type=int)
+    zip_file = request.files["file"]
+    if not zip_file.filename:
+        return jsonify({"error": "No filename provided."}), 400
+    if not zip_file.filename.lower().endswith(".zip"):
+        return jsonify({"error": "Uploaded file must be a .zip archive."}), 400
+
+    try:
+        zip_bytes = zip_file.read()
+    except Exception as exc:
+        logger.error("Failed to read uploaded ZIP: %s", exc)
+        return jsonify({"error": "Failed to read uploaded file."}), 400
+
     pipeline = _pipeline()
-    snapshot = pipeline._snapshot()
+    if not pipeline.is_ready:
+        return jsonify({"error": "Face pipeline is not ready."}), 503
 
-    entry = snapshot.get(identity_id)
-    if not entry:
-        return jsonify({"similar": []}), 200
+    max_mb = current_app.config.get("IMPORT_MAX_ZIP_MB", 100)
 
-    results = []
-    for other_id, other_data in snapshot.items():
-        if other_id == identity_id:
-            continue
-        sim = identity_similarity(entry, other_data)
-        if sim > 0.40:
-            other_identity = FaceIdentity.query.get(other_id)
-            results.append({
-                "identity_id":  other_id,
-                "label":        other_data["label"],
-                "is_confirmed": other_data.get("is_confirmed", False),
-                "similarity":   round(sim, 3),
-                "thumbnail":    (
-                    f"/violations/image/{other_identity.thumbnail_filename}"
-                    if other_identity and other_identity.thumbnail_filename else None
-                ),
-            })
+    try:
+        result = run_import(
+            zip_bytes=zip_bytes,
+            pipeline=pipeline,
+            config=current_app.config,
+            max_mb=max_mb,
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception as exc:
+        logger.error("Import failed: %s", exc, exc_info=True)
+        return jsonify({"error": "Import failed."}), 500
 
-    results.sort(key=lambda x: x["similarity"], reverse=True)
-    return jsonify({"similar": results[:limit]}), 200
+    try:
+        pipeline.reload_cache()
+    except Exception:
+        pass
+
+    status_code = 207 if (result["failed"] > 0 or result["errors"]) else 200
+    return jsonify(result), status_code

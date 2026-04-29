@@ -53,6 +53,13 @@ class Config:
         "TEMP_DIR", os.path.join(BASE_DIR, "temp")
     )
 
+    # ── Identity Storage ──────────────────────────────────────────────────────────
+    IDENTITY_STORAGE_PATH = os.environ.get(
+        "IDENTITY_STORAGE_PATH", os.path.join(BASE_DIR, "identity_storage")
+    )
+
+    IMPORT_MAX_ZIP_MB: int = int(os.environ.get("IMPORT_MAX_ZIP_MB", "100"))
+
     # ── YOLO ──────────────────────────────────────────────────────────────────
     MODEL_PATH: str             = os.environ.get("MODEL_PATH", os.path.join(BASE_DIR, "..", "best.pt"))
     CONFIDENCE_THRESHOLD: float = float(_require("CONFIDENCE_THRESHOLD"))
