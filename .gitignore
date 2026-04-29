@@ -34,6 +34,7 @@ backend/safion.db
 backend/violations_images/
 backend/temp/
 backend/known_faces/
+backend/identity_storage
 
 #aider configs
 .aider*
