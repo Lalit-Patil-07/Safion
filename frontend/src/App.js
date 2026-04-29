@@ -11,7 +11,7 @@ import {
   Star, TrendingUp, Filter, Zap, Link2, LogOut
 } from 'lucide-react';
 
-const API = '';
+const API = 'http://10.7.2.29:5000';
 
 const VIOLATION_COLORS = {
   'NO-Hardhat':     '#EF4444',
@@ -84,6 +84,7 @@ const ImageModal = ({ imageUrl, onClose }) => {
 const NAV = [
   { id: 'dashboard',   icon: BarChart2,    label: 'Dashboard' },
   { id: 'identities',  icon: Users,        label: 'Identities' },
+  { id: 'import',      icon: Upload,       label: 'Import Identities' },
   { id: 'review',      icon: Inbox,        label: 'Review Queue' },
   { id: 'suggestions', icon: Zap,          label: 'Merge Suggestions' },
   { id: 'violations',  icon: AlertTriangle,label: 'Violations' },
@@ -219,7 +220,7 @@ const DashboardPage = ({ setView }) => {
 const ReviewQueuePage = ({ onCountChange, onModalImage }) => {
   const [items, setItems]       = useState([]);
   const [loading, setLoading]   = useState(true);
-  const [renaming, setRenaming] = useState(null);   // identity id being renamed
+  const [renaming, setRenaming] = useState(null);
   const [newLabel, setNewLabel] = useState('');
   const renameRef = useRef(null);
 
@@ -261,7 +262,7 @@ const ReviewQueuePage = ({ onCountChange, onModalImage }) => {
       body: JSON.stringify({ label: newLabel.trim() }),
     });
     if (r.ok) {
-      setItems(prev => prev.filter(i => i.id !== id));  // confirmed → leaves queue
+      setItems(prev => prev.filter(i => i.id !== id));
       onCountChange(items.length - 1);
     }
     setRenaming(null);
@@ -294,10 +295,7 @@ const ReviewQueuePage = ({ onCountChange, onModalImage }) => {
           {items.map(identity => (
             <div key={identity.id}
                  className="bg-card border border-border rounded-xl p-4 flex items-start gap-4 hover:border-primary/30 transition-all">
-              {/* Avatar */}
               <FaceAvatar src={identity.thumbnail} label={identity.label} />
-
-              {/* Body */}
               <div className="flex-1 min-w-0">
                 <div className="flex items-start justify-between gap-2 mb-1">
                   <div className="flex-1 min-w-0">
@@ -318,8 +316,6 @@ const ReviewQueuePage = ({ onCountChange, onModalImage }) => {
                     <span className="text-xs text-text-secondary">{ago(identity.last_seen)}</span>
                   </div>
                 </div>
-
-                {/* Stats row */}
                 <div className="flex items-center gap-4 mb-2 text-xs text-text-secondary">
                   <span>{identity.violation_count ?? 0} violations</span>
                   <span>{identity.embedding_count ?? 0} embeddings</span>
@@ -328,8 +324,6 @@ const ReviewQueuePage = ({ onCountChange, onModalImage }) => {
                     <ConfidenceBar score={identity.identity_confidence} />
                   </div>
                 </div>
-
-                {/* Preview images */}
                 {identity.preview_images?.length > 0 && (
                   <div className="flex gap-2 mb-3">
                     {identity.preview_images.map((img, i) => (
@@ -339,8 +333,6 @@ const ReviewQueuePage = ({ onCountChange, onModalImage }) => {
                     ))}
                   </div>
                 )}
-
-                {/* Actions */}
                 <div className="flex items-center gap-2">
                   <button onClick={() => confirm(identity.id)}
                           className="flex items-center gap-1.5 px-3 py-1.5 bg-green-500 text-white text-xs font-semibold rounded-lg hover:bg-green-600 transition-all">
@@ -381,7 +373,7 @@ const IdentityCard = ({ identity, onSelect, onMergeStart, merging, onMergeTarget
       body: JSON.stringify({ label }),
     });
     setEditing(false);
-    if (r.ok) onRefresh();   // refresh local data — NO window.reload()
+    if (r.ok) onRefresh();
   };
 
   return (
@@ -410,7 +402,6 @@ const IdentityCard = ({ identity, onSelect, onMergeStart, merging, onMergeTarget
         </div>
       </div>
 
-      {/* Confidence bar */}
       <div className="mb-2">
         <ConfidenceBar score={identity.identity_confidence} />
       </div>
@@ -486,7 +477,6 @@ const IdentityDetail = ({ identity, onClose, onModalImage, onRefresh }) => {
           <div className="flex justify-center py-20"><Loader size={28} className="animate-spin text-text-secondary" /></div>
         ) : (
           <div className="p-5 space-y-5">
-            {/* Profile */}
             <div className="flex items-start gap-4">
               <FaceAvatar src={id?.thumbnail} label={id?.label} size="lg" />
               <div className="flex-1">
@@ -508,7 +498,6 @@ const IdentityDetail = ({ identity, onClose, onModalImage, onRefresh }) => {
               </div>
             </div>
 
-            {/* Face samples — multiple views */}
             {samples.length > 0 && (
               <div>
                 <div className="text-xs font-semibold text-text-secondary uppercase tracking-wide mb-2">
@@ -531,7 +520,6 @@ const IdentityDetail = ({ identity, onClose, onModalImage, onRefresh }) => {
               </div>
             )}
 
-            {/* Confidence */}
             <div className="bg-card-secondary rounded-xl p-4">
               <div className="flex items-center justify-between mb-2">
                 <span className="text-xs font-semibold text-text-secondary uppercase tracking-wide">Identity Confidence</span>
@@ -543,7 +531,6 @@ const IdentityDetail = ({ identity, onClose, onModalImage, onRefresh }) => {
               </p>
             </div>
 
-            {/* Stats */}
             <div className="grid grid-cols-3 gap-3">
               {[
                 { label: 'Violations', value: id?.violation_count },
@@ -557,7 +544,6 @@ const IdentityDetail = ({ identity, onClose, onModalImage, onRefresh }) => {
               ))}
             </div>
 
-            {/* Similar identities */}
             {similar.length > 0 && (
               <div>
                 <div className="text-xs font-semibold text-text-secondary uppercase tracking-wide mb-2 flex items-center gap-1.5">
@@ -584,7 +570,6 @@ const IdentityDetail = ({ identity, onClose, onModalImage, onRefresh }) => {
               </div>
             )}
 
-            {/* Violation type breakdown */}
             {data?.type_counts && Object.keys(data.type_counts).length > 0 && (
               <div>
                 <div className="text-xs font-semibold text-text-secondary uppercase tracking-wide mb-2">By type</div>
@@ -599,7 +584,6 @@ const IdentityDetail = ({ identity, onClose, onModalImage, onRefresh }) => {
               </div>
             )}
 
-            {/* Timeline */}
             <div>
               <div className="text-xs font-semibold text-text-secondary uppercase tracking-wide mb-3">Violation timeline</div>
               {!data?.violations?.length ? (
@@ -641,7 +625,7 @@ const MergeSuggestionsPage = ({ onCountChange }) => {
   const [data,     setData]     = useState(null);
   const [loading,  setLoading]  = useState(true);
   const [dismissed,setDismissed]= useState(new Set());
-  const [merging,  setMerging]  = useState(null);  // pair key being merged
+  const [merging,  setMerging]  = useState(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -697,7 +681,6 @@ const MergeSuggestionsPage = ({ onCountChange }) => {
         </button>
       </div>
 
-      {/* Explanation */}
       <div className="mb-5 p-4 bg-blue-50 border border-blue-200 rounded-xl text-sm text-blue-800">
         <strong>How this works:</strong> The system compares identities using multiple face prototypes.
         Pairs shown here have high embedding similarity and may represent the same physical person.
@@ -722,7 +705,6 @@ const MergeSuggestionsPage = ({ onCountChange }) => {
             return (
               <div key={key}
                    className="bg-card border border-border rounded-xl p-4 hover:border-primary/30 transition-all">
-                {/* Similarity score header */}
                 <div className="flex items-center justify-between mb-4">
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-bold" style={{ color: simColor(s.similarity) }}>
@@ -740,7 +722,6 @@ const MergeSuggestionsPage = ({ onCountChange }) => {
                   </span>
                 </div>
 
-                {/* Side-by-side comparison */}
                 <div className="grid grid-cols-2 gap-4 mb-4">
                   {[
                     { id: s.identity_a_id, label: s.identity_a_label, thumb: s.thumbnail_a },
@@ -756,7 +737,6 @@ const MergeSuggestionsPage = ({ onCountChange }) => {
                   ))}
                 </div>
 
-                {/* Actions */}
                 <div className="flex items-center gap-2">
                   <button
                     onClick={() => handleMerge(s)}
@@ -910,6 +890,253 @@ const IdentityManagementPage = ({ onModalImage }) => {
           onClose={() => { setSelected(null); load(page, search, confirmed); }}
           onModalImage={onModalImage}
           onRefresh={() => load(page, search, confirmed)} />
+      )}
+    </div>
+  );
+};
+
+// ── Identity Importer ─────────────────────────────────────────────────────────
+const ImportPage = () => {
+  const [file,      setFile]      = useState(null);
+  const [dragging,  setDragging]  = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [result,    setResult]    = useState(null);
+  const [error,     setError]     = useState('');
+  const importFileRef = useRef(null);
+
+  const selectFile = (f) => {
+    setResult(null);
+    setError('');
+    if (!f) return;
+    if (!f.name.toLowerCase().endsWith('.zip')) {
+      setError('Only .zip files are accepted. Please choose a valid archive.');
+      return;
+    }
+    setFile(f);
+  };
+
+  const clearFile = (e) => {
+    e?.stopPropagation();
+    setFile(null);
+    setResult(null);
+    setError('');
+    if (importFileRef.current) importFileRef.current.value = '';
+  };
+
+  const onDragOver  = (e) => { e.preventDefault(); setDragging(true);  };
+  const onDragLeave = ()  => setDragging(false);
+  const onDrop      = (e) => {
+    e.preventDefault();
+    setDragging(false);
+    selectFile(e.dataTransfer.files?.[0]);
+  };
+
+  const handleUpload = async () => {
+    if (!file || uploading) return;
+    setUploading(true);
+    setResult(null);
+    setError('');
+
+    const fd = new FormData();
+    fd.append('file', file);
+
+    try {
+      const r    = await fetch(`${API}/face/import`, { method: 'POST', body: fd });
+      const data = await r.json().catch(() => ({}));
+
+      if (r.status === 400 || r.status === 503) {
+        setError(data.error || `Server returned ${r.status}.`);
+      } else if (r.status === 200 || r.status === 207) {
+        setResult({ ...data, partial: r.status === 207 });
+      } else {
+        setError(data.error || `Unexpected status ${r.status}.`);
+      }
+    } catch {
+      setError('Network error — could not reach the server.');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const fmtBytes = (b) => {
+    if (b < 1024)    return `${b} B`;
+    if (b < 1048576) return `${(b / 1024).toFixed(1)} KB`;
+    return `${(b / 1048576).toFixed(1)} MB`;
+  };
+
+  return (
+    <div className="p-6 max-w-2xl">
+      <h2 className="text-2xl font-bold text-text mb-1">Import Identities</h2>
+      <p className="text-sm text-text-secondary mb-6">
+        Bulk-enroll known individuals by uploading a ZIP archive containing their
+        photos and an optional CSV manifest.
+      </p>
+
+      {/* Drop zone */}
+      <div
+        role="button"
+        tabIndex={0}
+        onDragOver={onDragOver}
+        onDragLeave={onDragLeave}
+        onDrop={onDrop}
+        onClick={() => !file && importFileRef.current?.click()}
+        onKeyDown={(e) => e.key === 'Enter' && !file && importFileRef.current?.click()}
+        className={`border-2 border-dashed rounded-xl p-10 text-center transition-all select-none
+          ${dragging
+            ? 'border-primary bg-primary/5 scale-[1.01]'
+            : file
+              ? 'border-green-400 bg-green-50/60 cursor-default'
+              : 'border-border hover:border-primary/60 hover:bg-card-secondary cursor-pointer'
+          }`}
+      >
+        <input
+          ref={importFileRef}
+          type="file"
+          accept=".zip"
+          className="hidden"
+          onChange={(e) => selectFile(e.target.files?.[0])}
+        />
+
+        {file ? (
+          <div className="flex flex-col items-center gap-2">
+            <div className="w-12 h-12 rounded-full bg-green-100 flex items-center justify-center">
+              <CheckCircle size={24} className="text-green-500" />
+            </div>
+            <p className="text-sm font-semibold text-text">{file.name}</p>
+            <p className="text-xs text-text-secondary">{fmtBytes(file.size)}</p>
+            <button
+              onClick={clearFile}
+              className="mt-1 flex items-center gap-1 text-xs text-red-400 hover:text-red-600 transition-colors"
+            >
+              <X size={11} /> Remove
+            </button>
+          </div>
+        ) : (
+          <div className="flex flex-col items-center gap-3 pointer-events-none">
+            <div className={`w-14 h-14 rounded-full flex items-center justify-center transition-colors
+                             ${dragging ? 'bg-primary/10' : 'bg-card-secondary'}`}>
+              <Upload size={26} className={dragging ? 'text-primary' : 'text-text-secondary'} />
+            </div>
+            <div>
+              <p className="text-sm font-semibold text-text">
+                {dragging ? 'Release to select' : 'Drop a ZIP file here, or click to browse'}
+              </p>
+              <p className="text-xs text-text-secondary mt-1">.zip only · max 100 MB</p>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Format guide */}
+      <div className="mt-4 bg-card border border-border rounded-xl overflow-hidden">
+        <div className="px-4 py-3 border-b border-border bg-card-secondary">
+          <span className="text-xs font-semibold text-text-secondary uppercase tracking-wide">
+            Expected ZIP structure
+          </span>
+        </div>
+        <div className="px-4 py-3 font-mono text-xs text-text-secondary space-y-0.5 leading-relaxed">
+          <p><span className="text-amber-500">📁</span> images/</p>
+          <p className="pl-4">
+            <span className="text-blue-400">📁</span> Alice Smith/
+            <span className="text-text-secondary/50 font-sans ml-2">← folder name becomes identity label</span>
+          </p>
+          <p className="pl-8"><span className="text-green-400">🖼</span> photo1.jpg</p>
+          <p className="pl-8"><span className="text-green-400">🖼</span> photo2.jpg</p>
+          <p className="pl-4"><span className="text-blue-400">📁</span> Bob Jones/</p>
+          <p className="pl-8"><span className="text-green-400">🖼</span> headshot.png</p>
+          <p className="mt-1">
+            <span className="text-purple-400">📄</span> identities.csv
+            <span className="text-text-secondary/50 font-sans ml-2">← optional · columns: name, external_id, metadata</span>
+          </p>
+        </div>
+      </div>
+
+      {/* Error banner */}
+      {error && (
+        <div className="mt-4 flex items-start gap-3 p-4 bg-red-50 border border-red-200 rounded-xl">
+          <XCircle size={16} className="text-red-500 flex-shrink-0 mt-0.5" />
+          <p className="text-sm text-red-700">{error}</p>
+        </div>
+      )}
+
+      {/* Result panel */}
+      {result && (
+        <div className={`mt-4 rounded-xl border overflow-hidden
+          ${result.partial ? 'border-amber-200' : 'border-green-200'}`}>
+          <div className={`flex items-center gap-2.5 px-4 py-3 border-b
+            ${result.partial
+              ? 'bg-amber-50 border-amber-200 text-amber-700'
+              : 'bg-green-50 border-green-200 text-green-700'
+            }`}>
+            {result.partial
+              ? <AlertTriangle size={16} className="flex-shrink-0" />
+              : <CheckCircle   size={16} className="flex-shrink-0" />
+            }
+            <span className="text-sm font-semibold">
+              {result.partial ? 'Partial success — some identities had issues' : 'Import complete'}
+            </span>
+          </div>
+
+          {/* Stats row */}
+          <div className="grid grid-cols-3 divide-x divide-border bg-card">
+            {[
+              { label: 'Planned',  value: result.total_identities, cls: 'text-text' },
+              { label: 'Created',  value: result.created,          cls: 'text-green-600' },
+              { label: 'Failed',   value: result.failed,
+                cls: result.failed > 0 ? 'text-red-500' : 'text-text-secondary' },
+            ].map(({ label, value, cls }) => (
+              <div key={label} className="flex flex-col items-center py-4 gap-0.5">
+                <span className={`text-2xl font-bold ${cls}`}>{value}</span>
+                <span className="text-xs text-text-secondary">{label}</span>
+              </div>
+            ))}
+          </div>
+
+          {/* Error list */}
+          {result.errors?.length > 0 && (
+            <div className="border-t border-border bg-card">
+              <div className="px-4 py-2.5 border-b border-border bg-card-secondary flex items-center justify-between">
+                <span className="text-xs font-semibold text-text-secondary uppercase tracking-wide">
+                  Issues ({result.errors.length})
+                </span>
+                <span className="text-xs text-text-secondary">
+                  These identities were skipped or partially processed
+                </span>
+              </div>
+              <div className="divide-y divide-border max-h-52 overflow-y-auto">
+                {result.errors.map((e, i) => (
+                  <div key={i} className="flex items-start gap-3 px-4 py-2.5">
+                    <XCircle size={13} className="text-red-400 flex-shrink-0 mt-0.5" />
+                    <div className="text-xs min-w-0">
+                      <span className="font-semibold text-text">{e.identity}</span>
+                      <span className="text-text-secondary"> — {e.error}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Upload button */}
+      <button
+        onClick={handleUpload}
+        disabled={!file || uploading}
+        className="mt-5 w-full flex items-center justify-center gap-2.5 py-3 bg-primary text-white
+                   text-sm font-semibold rounded-xl hover:opacity-90 disabled:opacity-40
+                   disabled:cursor-not-allowed transition-all"
+      >
+        {uploading
+          ? <><Loader size={15} className="animate-spin" /> Uploading…</>
+          : <><Upload size={15} /> Start Import</>
+        }
+      </button>
+
+      {uploading && (
+        <p className="text-center text-xs text-text-secondary mt-3">
+          Generating embeddings — this may take a moment for large archives…
+        </p>
       )}
     </div>
   );
@@ -1090,7 +1317,6 @@ export default function App() {
 
   useEffect(() => { checkHealth(); const i = setInterval(checkHealth, 10000); return () => clearInterval(i); }, [checkHealth]);
 
-  // Seed review + suggestion badge on load
   useEffect(() => {
     fetch(`${API}/face/review-queue`)
       .then(r => r.json())
@@ -1165,18 +1391,19 @@ export default function App() {
 
   const renderPage = () => {
     switch (view) {
-      case 'dashboard':  return <DashboardPage setView={setView} />;
-      case 'identities': return <IdentityManagementPage onModalImage={setModalImage} />;
-      case 'review':     return <ReviewQueuePage onCountChange={setReviewCount} onModalImage={setModalImage} />;
+      case 'dashboard':   return <DashboardPage setView={setView} />;
+      case 'identities':  return <IdentityManagementPage onModalImage={setModalImage} />;
+      case 'import':      return <ImportPage />;
+      case 'review':      return <ReviewQueuePage onCountChange={setReviewCount} onModalImage={setModalImage} />;
       case 'suggestions': return <MergeSuggestionsPage onCountChange={setSuggestionsCount} />;
-      case 'violations': return <ViolationLogPage onModalImage={setModalImage} />;
-      case 'monitor':    return (
+      case 'violations':  return <ViolationLogPage onModalImage={setModalImage} />;
+      case 'monitor':     return (
         <LiveMonitorPage activeStreams={activeStreams} stopStream={stopStream} startStream={startStream}
           serverStatus={serverStatus} handleVideoUpload={handleVideoUpload}
           fileInputRef={fileInputRef} isLoading={isLoading}
           zoomedId={zoomedId} setZoomedId={setZoomedId} />
       );
-      case 'settings':   return (
+      case 'settings':    return (
         <SettingsPage rtspStreams={rtspStreams} setRtspStreams={setRtspStreams}
           startStream={startStream} serverStatus={serverStatus} />
       );

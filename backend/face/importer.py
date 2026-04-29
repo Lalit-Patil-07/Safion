@@ -11,8 +11,8 @@ import numpy as np
 from PIL import Image
 import cv2
 
-from face.models import Identity
-from database import db
+from face.models import FaceIdentity, FaceEmbedding
+from extensions import db
 
 logger = logging.getLogger(__name__)
 
@@ -104,8 +104,13 @@ def _import_identities(identities: List[Dict[str, Any]], pipeline, config) -> Di
                     if image is None:
                         continue
 
-                    # Generate embedding
-                    embedding = pipeline.get_embedding(image)
+                    # Generate embedding using correct pipeline method
+                    faces = pipeline.embed_crop(image)
+
+                    if not faces:
+                        continue
+
+                    embedding = faces[0].get('embedding')
                     if embedding is not None:
                         embeddings.append(embedding)
                 except Exception as e:
@@ -121,14 +126,14 @@ def _import_identities(identities: List[Dict[str, Any]], pipeline, config) -> Di
             avg_embedding = np.mean(embeddings, axis=0)
 
             # Create or update identity
-            existing_identity = Identity.query.filter_by(name=identity_name).first()
+            existing_identity = FaceIdentity.query.filter_by(name=identity_name).first()
             if existing_identity:
                 # Update existing identity
                 existing_identity.embedding = avg_embedding.tobytes()
                 db.session.commit()
             else:
                 # Create new identity
-                new_identity = Identity(
+                new_identity = FaceIdentity(
                     name=identity_name,
                     embedding=avg_embedding.tobytes()
                 )
