@@ -94,12 +94,9 @@ def list_identities():
 
     paginated = query.paginate(page=page, per_page=limit, error_out=False)
 
-    # Use to_summary() — no .count() subqueries per identity for large lists
-    # Full counts available on identity detail view
     items = []
     for identity in paginated.items:
         d = identity.to_summary()
-        # Add counts efficiently using already-loaded relationship counts
         d["violation_count"] = identity.violations.count()
         d["embedding_count"] = identity.embeddings.count()
         items.append(d)
@@ -140,7 +137,6 @@ def get_identity_violations(identity_id: str):
         .all()
     )
 
-    # Aggregate by type for the summary bar
     type_counts: dict = {}
     for v in violations:
         type_counts[v.violation_type] = type_counts.get(v.violation_type, 0) + 1
@@ -149,6 +145,128 @@ def get_identity_violations(identity_id: str):
         "identity":    identity.to_dict(),
         "violations":  [v.to_dict() for v in violations],
         "type_counts": type_counts,
+    }), 200
+
+
+# ── Identity similarity ───────────────────────────────────────────────────────
+@face_bp.get("/identity/<identity_id>/similarity")
+def get_identity_similarity(identity_id: str):
+    """
+    Similarity report for a single identity.
+
+    Returns:
+      - intra_similarity  : mean pairwise cosine similarity among this
+                            identity's own stored embeddings.  High (>0.6)
+                            means the stored embeddings are consistent.
+                            Low (<0.3) indicates the identity contains
+                            mixed or poor-quality embeddings.
+      - prototype_norms   : list of L2 norms for each cached prototype.
+                            All should be ~1.0; any value far from 1.0
+                            indicates a normalisation bug in the pipeline.
+      - similar           : up to `limit` other identities ranked by
+                            prototype similarity, with their scores and
+                            confirmation state.  Used by the frontend
+                            "Potentially same person" panel.
+
+    Query params:
+        limit (int, default 3, max 20)
+    """
+    identity = FaceIdentity.query.get(identity_id)
+    if not identity:
+        return jsonify({"error": "Identity not found."}), 404
+
+    limit = min(20, max(1, request.args.get("limit", 3, type=int)))
+
+    # ── Intra-identity similarity ─────────────────────────────────────────────
+    # Measures how consistent the stored embeddings are with each other.
+    # A confirmed identity with good data should score > 0.55 for ArcFace.
+    emb_rows = identity.embeddings.order_by(FaceEmbedding.quality_score.desc()).all()
+
+    intra_similarity: float = 0.0
+    prototype_norms:  list  = []
+
+    if len(emb_rows) >= 2:
+        vecs = np.stack([
+            np.asarray(r.embedding_vec, dtype=np.float32) for r in emb_rows
+        ])
+        # Recompute norms to surface any normalisation drift from pgvector
+        norms = np.linalg.norm(vecs, axis=1)
+        # Re-normalise before computing similarities so result is always in [-1,1]
+        safe = norms > 0
+        vecs[safe] = vecs[safe] / norms[safe, None]
+
+        sim_matrix = vecs @ vecs.T                 # (N, N) cosine similarity matrix
+        n = len(vecs)
+        # Extract upper triangle (excluding diagonal) — N*(N-1)/2 unique pairs
+        upper_idx = np.triu_indices(n, k=1)
+        pair_sims = sim_matrix[upper_idx]
+        intra_similarity = float(np.mean(pair_sims)) if len(pair_sims) else 1.0
+        prototype_norms  = norms.tolist()
+    elif len(emb_rows) == 1:
+        intra_similarity = 1.0   # trivially self-similar
+        vec  = np.asarray(emb_rows[0].embedding_vec, dtype=np.float32)
+        prototype_norms = [float(np.linalg.norm(vec))]
+
+    # ── Similar identities from live cache ────────────────────────────────────
+    # Pulls from the in-memory prototype cache — no additional DB queries.
+    # Uses the same similarity formula as the merge-suggestion engine so the
+    # scores are consistent with what the operator sees in the Suggestions page.
+    pipeline    = _pipeline()
+    snapshot    = pipeline._snapshot()
+    this_entry  = snapshot.get(identity_id)
+    similar_out: list = []
+
+    if this_entry:
+        from face.similarity import identity_similarity
+
+        candidates = []
+        for other_id, other_data in snapshot.items():
+            if other_id == identity_id:
+                continue
+            sim = identity_similarity(this_entry, other_data)
+            if sim > 0.0:
+                candidates.append((other_id, other_data, sim))
+
+        candidates.sort(key=lambda x: x[2], reverse=True)
+
+        for other_id, other_data, sim in candidates[:limit]:
+            other_identity = FaceIdentity.query.get(other_id)
+            similar_out.append({
+                "identity_id":  other_id,
+                "label":        other_data["label"],
+                "similarity":   round(sim, 4),
+                "is_confirmed": other_data.get("is_confirmed", False),
+                "is_archived":  other_data.get("is_archived",  False),
+                "thumbnail":    (
+                    f"/violations/image/{other_identity.thumbnail_filename}"
+                    if other_identity and other_identity.thumbnail_filename else None
+                ),
+            })
+
+    # ── Cache entry diagnostics ───────────────────────────────────────────────
+    # Expose prototype count and per-prototype norm so operators can confirm
+    # that the runtime cache is healthy for this identity.
+    cached_prototypes = []
+    if this_entry:
+        for i, proto in enumerate(this_entry.get("prototypes", [])):
+            vec  = proto["vec"]
+            norm = float(np.linalg.norm(vec))
+            cached_prototypes.append({
+                "index":  i,
+                "weight": round(proto["weight"], 4),
+                "count":  proto["count"],
+                "norm":   round(norm, 6),   # should always be ~1.0
+            })
+
+    return jsonify({
+        "identity_id":       identity_id,
+        "label":             identity.label,
+        "embedding_count":   len(emb_rows),
+        "intra_similarity":  round(intra_similarity, 4),
+        "prototype_norms":   [round(n, 6) for n in prototype_norms],
+        "cached_prototypes": cached_prototypes,
+        "cache_hit":         this_entry is not None,
+        "similar":           similar_out,
     }), 200
 
 
@@ -203,15 +321,12 @@ def merge_identities():
     if not source: return jsonify({"error": "source_id not found."}), 404
     if not target: return jsonify({"error": "target_id not found."}), 404
 
-    # Move embeddings and violations to target
     FaceEmbedding.query.filter_by(identity_id=source_id).update({"identity_id": target_id})
     Violation.query.filter_by(identity_id=source_id).update({"identity_id": target_id})
 
-    # Archive source — do NOT delete, keeps audit trail
-    source.is_archived   = True
+    source.is_archived    = True
     source.merged_into_id = target_id
 
-    # If source had a thumbnail and target doesn't, inherit it
     if source.thumbnail_filename and not target.thumbnail_filename:
         target.thumbnail_filename = source.thumbnail_filename
 
@@ -331,15 +446,9 @@ def review_queue():
     Returns unconfirmed, non-archived identities sorted by:
       1. violation_count DESC  (high-risk first)
       2. last_seen DESC        (recent activity first)
-
-    Each item includes the identity summary + its two most recent violation
-    images so the operator can make a quick decision without opening a detail view.
-
-    Used by the Review Queue panel in the frontend.
     """
     from sqlalchemy import func
 
-    # Subquery: count violations per identity
     vcount = (
         db.session.query(
             Violation.identity_id,
@@ -367,7 +476,6 @@ def review_queue():
         d["violation_count"] = identity.violations.count()
         d["embedding_count"] = identity.embeddings.count()
 
-        # Two most recent violation images for quick preview
         recent_violations = (
             identity.violations
             .filter(Violation.image_filename.isnot(None))
@@ -390,10 +498,6 @@ def get_merge_suggestions():
     """
     Return ranked merge suggestions for unconfirmed identities.
     Generated on demand from the live cache — always fresh, no DB reads.
-
-    Query params:
-        threshold (float, default from config)
-        limit     (int,   default from config)
     """
     from face.similarity import generate_merge_suggestions
 
@@ -408,10 +512,9 @@ def get_merge_suggestions():
     snapshot    = pipeline._snapshot()
     suggestions = generate_merge_suggestions(snapshot, threshold=threshold, max_results=limit)
 
-    # Enrich each suggestion with thumbnail paths for the UI
     for s in suggestions:
         for key in ("identity_a_id", "identity_b_id"):
-            identity = FaceIdentity.query.get(s[key])
+            identity  = FaceIdentity.query.get(s[key])
             thumb_key = "thumbnail_a" if key == "identity_a_id" else "thumbnail_b"
             s[thumb_key] = (
                 f"/violations/image/{identity.thumbnail_filename}"
@@ -430,7 +533,7 @@ def get_merge_suggestions():
 def get_identity_samples(identity_id: str):
     """
     Return the top-N clearest violation images for this identity, ordered by
-    match_score DESC.  Used by the detail panel to display multiple face views.
+    match_score DESC.
     """
     identity = FaceIdentity.query.get(identity_id)
     if not identity:
@@ -446,7 +549,6 @@ def get_identity_samples(identity_id: str):
         .all()
     )
 
-    # Fall back to most recent if no match_score available
     if not samples:
         samples = (
             Violation.query
