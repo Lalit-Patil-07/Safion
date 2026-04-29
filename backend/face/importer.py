@@ -126,19 +126,15 @@ def _import_identities(identities: List[Dict[str, Any]], pipeline, config) -> Di
             avg_embedding = np.mean(embeddings, axis=0)
 
             # Create or update identity
-            existing_identity = FaceIdentity.query.filter_by(name=identity_name).first()
-            if existing_identity:
-                # Update existing identity
-                existing_identity.embedding = avg_embedding.tobytes()
-                db.session.commit()
-            else:
-                # Create new identity
-                new_identity = FaceIdentity(
-                    name=identity_name,
-                    embedding=avg_embedding.tobytes()
-                )
-                db.session.add(new_identity)
-                db.session.commit()
+            identity_row = FaceIdentity.query.filter_by(label=identity_name).first()
+            if not identity_row:
+                identity_row = FaceIdentity(label=identity_name, is_confirmed=True)
+                db.session.add(identity_row)
+                db.session.flush()
+
+            emb_row = FaceEmbedding(identity_id=identity_row.id)
+            emb_row.embedding = avg_embedding
+            db.session.add(emb_row)
 
             total_faces += len(face_files)
 
