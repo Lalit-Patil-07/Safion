@@ -5,16 +5,119 @@ import zipfile
 import tempfile
 import logging
 import shutil
-from typing import Dict, List, Any, Tuple
+from typing import Dict, List, Any, Optional, Tuple
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageOps
 import cv2
 
 from face.models import FaceIdentity, FaceEmbedding
 from extensions import db
 
 logger = logging.getLogger(__name__)
+
+
+def _load_bgr(path: str) -> Optional[np.ndarray]:
+    """
+    Read image file respecting EXIF orientation. Returns BGR uint8 array or None.
+    cv2.imread() ignores EXIF rotation; mobile photos stored sideways cause
+    RetinaFace misalignment and garbage ArcFace embeddings.
+    """
+    try:
+        with Image.open(path) as pil_img:
+            pil_img = ImageOps.exif_transpose(pil_img)
+            rgb = np.asarray(pil_img.convert("RGB"), dtype=np.uint8)
+        return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+    except Exception as exc:
+        logger.warning("PIL read failed for %s (%s) — falling back to cv2.imread", path, exc)
+        return cv2.imread(path)
+
+
+def _embed_face_crop(image_bgr: np.ndarray, pipeline) -> Optional[dict]:
+    """
+    Two-stage embedding to match runtime embed_crop() input conditions.
+
+    Root cause of mismatch
+    ----------------------
+    At runtime, embed_crop() receives a YOLO person-bbox crop (upper body).
+    The face occupies ~30–60 % of the crop height, so RetinaFace operates on
+    a face that is a large fraction of the input, giving precise landmark
+    localisation and reliable ArcFace alignment.
+
+    Passing a full photo directly (face < 5 % of image) causes RetinaFace to
+    work on a down-sampled, small face region → imprecise landmarks → slightly
+    different ArcFace alignment → cosine similarity 0.13–0.27 at runtime.
+
+    Fix
+    ---
+    Stage 1 — detect + select the correct face in the full image.
+    Stage 2 — crop the face region (+ 30 % padding) and re-embed via embed_crop().
+              This gives embed_crop() a tight face crop where the face dominates
+              the input, equivalent to the runtime person-crop scale.
+
+    Face selection (deterministic)
+    --------------------------------
+    · Zero detections   → return None
+    · Single detection  → use it
+    · Multiple detected → select by largest bbox area (most prominent person).
+      quality_score is area-ratio-relative and biases toward smaller faces in
+      large images; bbox area is image-context-independent.
+      A warning is logged so operators know to use single-person photos.
+
+    Fallback
+    --------
+    If Stage-2 embed_crop returns nothing (crop too small / quality gate),
+    the Stage-1 embedding is returned rather than dropping the image entirely.
+    """
+
+    # ── Stage 1: detect faces in full image ──────────────────────────────────
+    detections = pipeline.embed_crop(image_bgr)
+
+    if not detections:
+        return None
+
+    if len(detections) == 1:
+        selected = detections[0]
+    else:
+        def _bbox_area(f: dict) -> float:
+            x1, y1, x2, y2 = f["bbox"]
+            return max(0.0, x2 - x1) * max(0.0, y2 - y1)
+
+        selected = max(detections, key=_bbox_area)
+        logger.warning(
+            "Multiple faces detected (%d) — selected largest (area=%.0f px²). "
+            "Use single-person photos for reliable import.",
+            len(detections), _bbox_area(selected),
+        )
+
+    # ── Stage 2: re-embed from cropped face region ────────────────────────────
+    x1, y1, x2, y2 = [int(v) for v in selected["bbox"]]
+    ih, iw = image_bgr.shape[:2]
+
+    # 30 % padding gives RetinaFace the facial-context it expects (forehead,
+    # chin, ears) without the sparsity of the full-image background.
+    pad_x = max(1, int((x2 - x1) * 0.30))
+    pad_y = max(1, int((y2 - y1) * 0.30))
+    cx1 = max(0, x1 - pad_x)
+    cy1 = max(0, y1 - pad_y)
+    cx2 = min(iw, x2 + pad_x)
+    cy2 = min(ih, y2 + pad_y)
+
+    face_crop = image_bgr[cy1:cy2, cx1:cx2]
+
+    if face_crop.size == 0:
+        logger.debug("Face crop is empty — using stage-1 embedding as fallback")
+        return selected
+
+    crop_detections = pipeline.embed_crop(face_crop)
+
+    if not crop_detections:
+        logger.debug("Stage-2 re-embed returned no faces — using stage-1 embedding")
+        return selected
+
+    # Within the tight crop the face dominates the frame; quality_score is
+    # now a meaningful signal — pick the highest.
+    return max(crop_detections, key=lambda f: f["quality_score"])
 
 
 def run_import(zip_bytes: bytes, pipeline, config, max_mb: int = 100) -> Dict[str, Any]:
@@ -77,25 +180,18 @@ def _import_identities(
     """
     Import validated identities into the database.
 
-    For each identity folder:
-      1. Copy images to persistent IDENTITY_STORAGE_PATH.
-      2. Find or create a FaceIdentity row keyed by `label` (not `name`).
-      3. Run embed_crop() on each image — identical to the live pipeline path.
-      4. Store each successful embedding as an individual FaceEmbedding row via
-         the model's `.embedding` setter, which handles L2 normalisation and
-         pgvector serialisation.
+    Embedding pipeline per image:
+      _load_bgr()          — EXIF-aware read → BGR uint8
+      _embed_face_crop()   — Stage-1 detect in full image, select primary face
+                           — Stage-2 crop face region, re-embed via embed_crop()
+                           — Embedding now matches runtime input scale/context
+      FaceEmbedding setter — L2 normalise + pgvector serialisation
 
-    Design decisions that match the rest of the system:
-      - Individual rows per source image (not an averaged blob) so that
-        _build_prototypes() and DBSCAN clustering have realistic data density.
-      - FaceEmbedding.embedding setter is the single normalisation point;
-        raw numpy arrays are passed in, never .tobytes().
-      - filter_by(label=…) is idempotent: re-running the import on an existing
-        identity appends more embeddings rather than duplicating the identity row.
-      - db.session.flush() after creating a new FaceIdentity gives us the PK
-        before writing child FaceEmbedding rows, without committing early.
-      - db.session.rollback() on zero-embedding identities prevents orphan
-        FaceIdentity rows with no associated embeddings entering the gallery.
+    DB semantics (unchanged):
+      - Individual FaceEmbedding rows per source image (not averaged blobs)
+        so _build_prototypes() and DBSCAN have realistic data density.
+      - filter_by(label=…) is idempotent — re-import appends embeddings.
+      - flush() before child FaceEmbedding rows; rollback on zero embeddings.
     """
     total_identities  = 0
     total_faces       = 0
@@ -122,8 +218,6 @@ def _import_identities(
                 dest_paths.append(dest)
 
             # ── 2. Find or create FaceIdentity keyed by `label` ───────────────
-            # FIX: FaceIdentity uses `label`, NOT `name`. Querying by `name`
-            # raises "namespace has no property 'name'" and crashes the import.
             identity_row = FaceIdentity.query.filter_by(label=identity_name).first()
             if not identity_row:
                 identity_row = FaceIdentity(
@@ -131,65 +225,43 @@ def _import_identities(
                     is_confirmed=True,
                 )
                 db.session.add(identity_row)
-                # flush() populates identity_row.id for the FK on FaceEmbedding
-                # without committing — lets us roll back cleanly if no faces found.
                 db.session.flush()
 
-            # ── 3. Extract embeddings from each image ─────────────────────────
+            # ── 3. Extract embeddings via two-stage _embed_face_crop() ─────────
             stored = 0
             for dest_path in dest_paths:
-                image = cv2.imread(dest_path)
+                image = _load_bgr(dest_path)
                 if image is None:
                     logger.warning("Could not decode image: %s", dest_path)
                     continue
 
                 try:
-                    # embed_crop() mirrors the live detection path:
-                    #   RetinaFace detection → ArcFace embedding → L2 normalise
-                    #   → quality gate (FACE_DET_SCORE_MIN / EMBEDDING_QUALITY_MIN)
-                    # Returns [] when no face passes the quality threshold.
-                    faces = pipeline.embed_crop(image)
+                    best = _embed_face_crop(image, pipeline)
                 except Exception as exc:
                     fname = os.path.basename(dest_path)
-                    logger.error("embed_crop failed for %s: %s", fname, exc)
+                    logger.error("_embed_face_crop failed for %s: %s", fname, exc)
                     errors.append(
-                        f"embed_crop failed for '{fname}' in '{identity_name}': {exc}"
+                        f"embed_face_crop failed for '{fname}' in '{identity_name}': {exc}"
                     )
                     continue
 
-                if not faces:
+                if best is None:
                     logger.debug("No detectable face in %s", dest_path)
                     continue
 
-                # Use the highest-quality detection from this image.
-                best = max(faces, key=lambda f: f["quality_score"])
-
-                # ── 4. Store via FaceEmbedding — DO NOT assign to FaceIdentity ─
-                # FIX: FaceIdentity has NO `embedding` column.  Embeddings live in
-                # the FaceEmbedding table.  Assigning directly to FaceIdentity
-                # (or storing raw .tobytes()) bypasses the normalisation setter and
-                # produces vectors incompatible with pgvector cosine matching.
-                #
-                # FaceEmbedding.embedding (property setter):
-                #   arr = np.asarray(value, float32).ravel()
-                #   norm = np.linalg.norm(arr)
-                #   self.embedding_vec = (arr / norm if norm > 0 else arr).tolist()
-                #
-                # Passing the already-L2-normalised ndarray from embed_crop()
-                # through the setter is safe — normalising a unit vector is a no-op.
+                # Store via setter: normalise + pgvector list.
+                # Never bypass with raw .tobytes() or direct FaceIdentity assignment.
                 emb_row = FaceEmbedding(
                     identity_id=identity_row.id,
                     det_score=best["det_score"],
                     quality_score=best["quality_score"],
                 )
-                emb_row.embedding = best["embedding"]   # setter: normalise + store
+                emb_row.embedding = best["embedding"]
                 db.session.add(emb_row)
                 stored += 1
 
-            # ── 5. Commit or roll back ─────────────────────────────────────────
+            # ── 4. Commit or roll back ─────────────────────────────────────────
             if stored == 0:
-                # No usable faces — roll back any new FaceIdentity row so we
-                # don't leave orphan identity entries with zero embeddings.
                 db.session.rollback()
                 failed_identities += 1
                 errors.append(
