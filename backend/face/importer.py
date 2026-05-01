@@ -35,42 +35,41 @@ def _load_bgr(path: str) -> Optional[np.ndarray]:
 
 def _embed_face_crop(image_bgr: np.ndarray, pipeline) -> Optional[dict]:
     """
-    Two-stage embedding to match runtime embed_crop() input conditions.
+    Two-stage embedding that matches the runtime person-crop detection context.
 
-    Root cause of mismatch
-    ----------------------
-    At runtime, embed_crop() receives a YOLO person-bbox crop (upper body).
-    The face occupies ~30–60 % of the crop height, so RetinaFace operates on
-    a face that is a large fraction of the input, giving precise landmark
-    localisation and reliable ArcFace alignment.
+    Root cause of the previous mismatch
+    ------------------------------------
+    The prior Stage-2 used a tight face crop (30 % padding), making the face
+    fill ~60-70 % of the input to embed_crop().  With det_size=(640,640) that
+    puts the face at ~490 px in detection space — above the effective anchor
+    range of RetinaFace (buffalo_l anchors top out around 320 px for reliable
+    landmark regression).  When RetinaFace fails to detect at that scale,
+    embed_crop() returns an empty list and the code falls back to the Stage-1
+    embedding: full photo → face is ~32 px in detection space → poor landmark
+    precision → effectively random ArcFace output.
 
-    Passing a full photo directly (face < 5 % of image) causes RetinaFace to
-    work on a down-sampled, small face region → imprecise landmarks → slightly
-    different ArcFace alignment → cosine similarity 0.13–0.27 at runtime.
+    At runtime, YOLO person crops have the face in the upper ~25-40 % of the
+    crop height, placing the face at ~160-250 px in the 640-px detection window.
+    That is the "good zone" for RetinaFace: det_score ≥ 0.9, landmark RMSE < 2 px.
 
     Fix
     ---
-    Stage 1 — detect + select the correct face in the full image.
-    Stage 2 — crop the face region (+ 30 % padding) and re-embed via embed_crop().
-              This gives embed_crop() a tight face crop where the face dominates
-              the input, equivalent to the runtime person-crop scale.
+    Stage 2 now builds a person-crop-scale region:
+      - small clearance above the face  (~15 % of face height)
+      - body context below the face     (~150 % of face height)
+      - symmetric horizontal padding    (~30 % of face width)
 
-    Face selection (deterministic)
-    --------------------------------
-    · Zero detections   → return None
-    · Single detection  → use it
+    This places the face at ~33 % of the crop height, matching runtime person
+    crops, so RetinaFace sees the same effective scale in both paths.
+
+    Face selection (deterministic, unchanged from prior version)
+    ------------------------------------------------------------
+    · Zero detections → return None
+    · Single detection → use it
     · Multiple detected → select by largest bbox area (most prominent person).
-      quality_score is area-ratio-relative and biases toward smaller faces in
-      large images; bbox area is image-context-independent.
-      A warning is logged so operators know to use single-person photos.
-
-    Fallback
-    --------
-    If Stage-2 embed_crop returns nothing (crop too small / quality gate),
-    the Stage-1 embedding is returned rather than dropping the image entirely.
     """
 
-    # ── Stage 1: detect faces in full image ──────────────────────────────────
+    # ── Stage 1: detect face(s) in full image ─────────────────────────────────
     detections = pipeline.embed_crop(image_bgr)
 
     if not detections:
@@ -90,33 +89,38 @@ def _embed_face_crop(image_bgr: np.ndarray, pipeline) -> Optional[dict]:
             len(detections), _bbox_area(selected),
         )
 
-    # ── Stage 2: re-embed from cropped face region ────────────────────────────
+    # ── Stage 2: re-embed using a person-crop-scale region ───────────────────
+    # Build a crop where the face occupies ~33 % of the crop height so that
+    # RetinaFace operates in the same anchor range as the runtime stream path.
     x1, y1, x2, y2 = [int(v) for v in selected["bbox"]]
     ih, iw = image_bgr.shape[:2]
 
-    # 30 % padding gives RetinaFace the facial-context it expects (forehead,
-    # chin, ears) without the sparsity of the full-image background.
-    pad_x = max(1, int((x2 - x1) * 0.30))
-    pad_y = max(1, int((y2 - y1) * 0.30))
+    face_h = max(1, y2 - y1)
+    face_w = max(1, x2 - x1)
+
+    pad_x        = max(1, int(face_w * 0.30))   # 30 % horizontal (unchanged)
+    pad_y_top    = max(1, int(face_h * 0.15))   # small head clearance above
+    pad_y_bottom = max(1, int(face_h * 1.50))   # body context below face
+
     cx1 = max(0, x1 - pad_x)
-    cy1 = max(0, y1 - pad_y)
+    cy1 = max(0, y1 - pad_y_top)
     cx2 = min(iw, x2 + pad_x)
-    cy2 = min(ih, y2 + pad_y)
+    cy2 = min(ih, y2 + pad_y_bottom)
 
-    face_crop = image_bgr[cy1:cy2, cx1:cx2]
+    person_scale_crop = image_bgr[cy1:cy2, cx1:cx2]
 
-    if face_crop.size == 0:
-        logger.debug("Face crop is empty — using stage-1 embedding as fallback")
+    if person_scale_crop.size == 0:
+        logger.debug("Person-scale crop is empty — using stage-1 embedding as fallback")
         return selected
 
-    crop_detections = pipeline.embed_crop(face_crop)
+    crop_detections = pipeline.embed_crop(person_scale_crop)
 
     if not crop_detections:
         logger.debug("Stage-2 re-embed returned no faces — using stage-1 embedding")
         return selected
 
-    # Within the tight crop the face dominates the frame; quality_score is
-    # now a meaningful signal — pick the highest.
+    # Within this crop the face is the largest object; quality_score is a
+    # meaningful signal — pick the highest.
     return max(crop_detections, key=lambda f: f["quality_score"])
 
 
@@ -183,15 +187,9 @@ def _import_identities(
     Embedding pipeline per image:
       _load_bgr()          — EXIF-aware read → BGR uint8
       _embed_face_crop()   — Stage-1 detect in full image, select primary face
-                           — Stage-2 crop face region, re-embed via embed_crop()
-                           — Embedding now matches runtime input scale/context
+                           — Stage-2 build person-crop-scale region, re-embed
+                           — Face now at ~33 % of crop height, matching runtime
       FaceEmbedding setter — L2 normalise + pgvector serialisation
-
-    DB semantics (unchanged):
-      - Individual FaceEmbedding rows per source image (not averaged blobs)
-        so _build_prototypes() and DBSCAN have realistic data density.
-      - filter_by(label=…) is idempotent — re-import appends embeddings.
-      - flush() before child FaceEmbedding rows; rollback on zero embeddings.
     """
     total_identities  = 0
     total_faces       = 0
@@ -249,8 +247,6 @@ def _import_identities(
                     logger.debug("No detectable face in %s", dest_path)
                     continue
 
-                # Store via setter: normalise + pgvector list.
-                # Never bypass with raw .tobytes() or direct FaceIdentity assignment.
                 emb_row = FaceEmbedding(
                     identity_id=identity_row.id,
                     det_score=best["det_score"],
