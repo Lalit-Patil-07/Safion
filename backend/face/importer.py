@@ -16,13 +16,10 @@ from extensions import db
 
 logger = logging.getLogger(__name__)
 
+_TARGET_FACE_PX: int = 250
+
 
 def _load_bgr(path: str) -> Optional[np.ndarray]:
-    """
-    Read image file respecting EXIF orientation. Returns BGR uint8 array or None.
-    cv2.imread() ignores EXIF rotation; mobile photos stored sideways cause
-    RetinaFace misalignment and garbage ArcFace embeddings.
-    """
     try:
         with Image.open(path) as pil_img:
             pil_img = ImageOps.exif_transpose(pil_img)
@@ -35,97 +32,97 @@ def _load_bgr(path: str) -> Optional[np.ndarray]:
 
 def _embed_face_crop(image_bgr: np.ndarray, pipeline) -> Optional[dict]:
     """
-    Two-stage embedding that matches the runtime person-crop detection context.
+    Two-stage embedding.
 
-    Root cause of the previous mismatch
-    ------------------------------------
-    The prior Stage-2 used a tight face crop (30 % padding), making the face
-    fill ~60-70 % of the input to embed_crop().  With det_size=(640,640) that
-    puts the face at ~490 px in detection space — above the effective anchor
-    range of RetinaFace (buffalo_l anchors top out around 320 px for reliable
-    landmark regression).  When RetinaFace fails to detect at that scale,
-    embed_crop() returns an empty list and the code falls back to the Stage-1
-    embedding: full photo → face is ~32 px in detection space → poor landmark
-    precision → effectively random ArcFace output.
+    Stage 1: detect face bbox in full image.
+    Stage 2: crop person-scale region, resize to _TARGET_FACE_PX, embed.
 
-    At runtime, YOLO person crops have the face in the upper ~25-40 % of the
-    crop height, placing the face at ~160-250 px in the 640-px detection window.
-    That is the "good zone" for RetinaFace: det_score ≥ 0.9, landmark RMSE < 2 px.
-
-    Fix
-    ---
-    Stage 2 now builds a person-crop-scale region:
-      - small clearance above the face  (~15 % of face height)
-      - body context below the face     (~150 % of face height)
-      - symmetric horizontal padding    (~30 % of face width)
-
-    This places the face at ~33 % of the crop height, matching runtime person
-    crops, so RetinaFace sees the same effective scale in both paths.
-
-    Face selection (deterministic, unchanged from prior version)
-    ------------------------------------------------------------
-    · Zero detections → return None
-    · Single detection → use it
-    · Multiple detected → select by largest bbox area (most prominent person).
+    Returns the best Stage-2 detection dict, or None if either stage fails.
+    Never falls back to Stage-1 embedding — Stage-1 embeddings are generated
+    from full photos where the face is small in detection space, producing
+    imprecise ArcFace alignment incompatible with runtime embeddings.
     """
 
-    # ── Stage 1: detect face(s) in full image ─────────────────────────────────
-    detections = pipeline.embed_crop(image_bgr)
-
-    if not detections:
+    # ── Stage 1: locate face bbox ──────────────────────────────────────────────
+    stage1 = pipeline.embed_crop(image_bgr)
+    if not stage1:
+        logger.warning("Stage-1: no face detected in full image — skipping.")
         return None
 
-    if len(detections) == 1:
-        selected = detections[0]
+    if len(stage1) == 1:
+        selected = stage1[0]
     else:
-        def _bbox_area(f: dict) -> float:
+        def _area(f: dict) -> float:
             x1, y1, x2, y2 = f["bbox"]
             return max(0.0, x2 - x1) * max(0.0, y2 - y1)
-
-        selected = max(detections, key=_bbox_area)
+        selected = max(stage1, key=_area)
         logger.warning(
-            "Multiple faces detected (%d) — selected largest (area=%.0f px²). "
+            "Stage-1: %d faces detected — selected largest (area=%.0f px²). "
             "Use single-person photos for reliable import.",
-            len(detections), _bbox_area(selected),
+            len(stage1), _area(selected),
         )
 
-    # ── Stage 2: re-embed using a person-crop-scale region ───────────────────
-    # Build a crop where the face occupies ~33 % of the crop height so that
-    # RetinaFace operates in the same anchor range as the runtime stream path.
+    logger.info(
+        "Stage-1: det_score=%.3f  quality=%.3f  bbox=%s",
+        selected["det_score"], selected["quality_score"],
+        [round(v, 1) for v in selected["bbox"]],
+    )
+
+    # ── Stage 2: build person-scale crop and resize ───────────────────────────
     x1, y1, x2, y2 = [int(v) for v in selected["bbox"]]
     ih, iw = image_bgr.shape[:2]
 
     face_h = max(1, y2 - y1)
     face_w = max(1, x2 - x1)
 
-    pad_x        = max(1, int(face_w * 0.30))   # 30 % horizontal (unchanged)
-    pad_y_top    = max(1, int(face_h * 0.15))   # small head clearance above
-    pad_y_bottom = max(1, int(face_h * 1.50))   # body context below face
+    pad_x        = max(1, int(face_w * 0.30))
+    pad_y_top    = max(1, int(face_h * 0.15))
+    pad_y_bottom = max(1, int(face_h * 1.50))
 
     cx1 = max(0, x1 - pad_x)
     cy1 = max(0, y1 - pad_y_top)
     cx2 = min(iw, x2 + pad_x)
     cy2 = min(ih, y2 + pad_y_bottom)
 
-    person_scale_crop = image_bgr[cy1:cy2, cx1:cx2]
+    crop = image_bgr[cy1:cy2, cx1:cx2]
+    if crop.size == 0:
+        logger.warning("Stage-2: person-scale crop is empty — skipping.")
+        return None
 
-    if person_scale_crop.size == 0:
-        logger.debug("Person-scale crop is empty — using stage-1 embedding as fallback")
-        return selected
+    scale  = _TARGET_FACE_PX / face_h
+    new_h  = max(1, int(crop.shape[0] * scale))
+    new_w  = max(1, int(crop.shape[1] * scale))
+    interp = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR
+    crop   = cv2.resize(crop, (new_w, new_h), interpolation=interp)
 
-    crop_detections = pipeline.embed_crop(person_scale_crop)
+    logger.info(
+        "Stage-2 crop: face_h=%dpx  scale=%.3f  crop=%dx%d  "
+        "face_in_det_space≈%dpx  InsightFace %s",
+        face_h, scale, new_w, new_h,
+        int(_TARGET_FACE_PX * (640.0 / new_h)),
+        "downscales ✓" if new_h >= 640 else f"UPSCALES {640/new_h:.2f}× ← quality loss risk",
+    )
 
-    if not crop_detections:
-        logger.debug("Stage-2 re-embed returned no faces — using stage-1 embedding")
-        return selected
+    # ── Stage 2: embed ────────────────────────────────────────────────────────
+    stage2 = pipeline.embed_crop(crop)
+    if not stage2:
+        logger.warning(
+            "Stage-2: embed_crop returned no detections "
+            "(crop=%dx%d, face_h=%dpx, scale=%.3f) — skipping image. "
+            "Do NOT fall back to Stage-1 embedding.",
+            new_w, new_h, face_h, scale,
+        )
+        return None
 
-    # Within this crop the face is the largest object; quality_score is a
-    # meaningful signal — pick the highest.
-    return max(crop_detections, key=lambda f: f["quality_score"])
+    best = max(stage2, key=lambda f: f["quality_score"])
+    logger.info(
+        "Stage-2: det_score=%.3f  quality=%.3f",
+        best["det_score"], best["quality_score"],
+    )
+    return best
 
 
 def run_import(zip_bytes: bytes, pipeline, config, max_mb: int = 100) -> Dict[str, Any]:
-    """Run the identity import process from a ZIP archive."""
     max_bytes = max_mb * 1024 * 1024
     if len(zip_bytes) > max_bytes:
         raise ValueError(f"ZIP file exceeds maximum size of {max_mb}MB")
@@ -140,7 +137,6 @@ def run_import(zip_bytes: bytes, pipeline, config, max_mb: int = 100) -> Dict[st
 
 
 def _extract_identities_from_zip(zip_path: str, temp_dir: str) -> List[Dict[str, Any]]:
-    """Extract identities from ZIP archive."""
     identities = []
     with zipfile.ZipFile(zip_path, 'r') as zip_ref:
         zip_ref.extractall(temp_dir)
@@ -158,10 +154,6 @@ def _extract_identities_from_zip(zip_path: str, temp_dir: str) -> List[Dict[str,
 
 
 def _process_identity_folder(identity_folder: str) -> List[Tuple[str, str]]:
-    """
-    Validate images in an identity folder.
-    Returns list of (absolute_file_path, file_name) for each valid image.
-    """
     faces = []
     for file in os.listdir(identity_folder):
         if not file.lower().endswith(('.png', '.jpg', '.jpeg')):
@@ -181,16 +173,6 @@ def _import_identities(
     pipeline,
     config,
 ) -> Dict[str, Any]:
-    """
-    Import validated identities into the database.
-
-    Embedding pipeline per image:
-      _load_bgr()          — EXIF-aware read → BGR uint8
-      _embed_face_crop()   — Stage-1 detect in full image, select primary face
-                           — Stage-2 build person-crop-scale region, re-embed
-                           — Face now at ~33 % of crop height, matching runtime
-      FaceEmbedding setter — L2 normalise + pgvector serialisation
-    """
     total_identities  = 0
     total_faces       = 0
     failed_identities = 0
@@ -205,7 +187,6 @@ def _import_identities(
         identity_data: List[Tuple[str, str]] = identity["data"]
 
         try:
-            # ── 1. Copy source images to persistent storage ────────────────────
             identity_path = os.path.join(storage_path, identity_name)
             os.makedirs(identity_path, exist_ok=True)
 
@@ -215,19 +196,15 @@ def _import_identities(
                 shutil.copy2(src_path, dest)
                 dest_paths.append(dest)
 
-            # ── 2. Find or create FaceIdentity keyed by `label` ───────────────
             identity_row = FaceIdentity.query.filter_by(label=identity_name).first()
             if not identity_row:
-                identity_row = FaceIdentity(
-                    label=identity_name,
-                    is_confirmed=True,
-                )
+                identity_row = FaceIdentity(label=identity_name, is_confirmed=True)
                 db.session.add(identity_row)
                 db.session.flush()
 
-            # ── 3. Extract embeddings via two-stage _embed_face_crop() ─────────
             stored = 0
             for dest_path in dest_paths:
+                fname = os.path.basename(dest_path)
                 image = _load_bgr(dest_path)
                 if image is None:
                     logger.warning("Could not decode image: %s", dest_path)
@@ -236,15 +213,16 @@ def _import_identities(
                 try:
                     best = _embed_face_crop(image, pipeline)
                 except Exception as exc:
-                    fname = os.path.basename(dest_path)
-                    logger.error("_embed_face_crop failed for %s: %s", fname, exc)
-                    errors.append(
-                        f"embed_face_crop failed for '{fname}' in '{identity_name}': {exc}"
-                    )
+                    logger.error("_embed_face_crop raised for %s: %s", fname, exc)
+                    errors.append(f"embed_face_crop failed for '{fname}' in '{identity_name}': {exc}")
                     continue
 
+                # None means Stage 2 failed — do not store anything for this image.
                 if best is None:
-                    logger.debug("No detectable face in %s", dest_path)
+                    logger.warning(
+                        "No valid Stage-2 embedding for '%s' in '%s' — image skipped.",
+                        fname, identity_name,
+                    )
                     continue
 
                 emb_row = FaceEmbedding(
@@ -255,13 +233,20 @@ def _import_identities(
                 emb_row.embedding = best["embedding"]
                 db.session.add(emb_row)
                 stored += 1
+                logger.info(
+                    "Stored Stage-2 embedding for '%s' from '%s'  "
+                    "det=%.3f  quality=%.3f  norm=%.6f",
+                    identity_name, fname,
+                    best["det_score"], best["quality_score"],
+                    float(np.linalg.norm(best["embedding"])),
+                )
 
-            # ── 4. Commit or roll back ─────────────────────────────────────────
             if stored == 0:
                 db.session.rollback()
                 failed_identities += 1
                 errors.append(
-                    f"No valid face embeddings could be extracted for '{identity_name}'"
+                    f"No valid Stage-2 embeddings extracted for '{identity_name}'. "
+                    f"Check that images are clear, well-lit, single-person photos."
                 )
                 continue
 

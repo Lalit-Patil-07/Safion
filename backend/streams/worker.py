@@ -490,20 +490,30 @@ class StreamWorker:
                 identity_id    = track.identity_id
                 identity_label = track.identity_label or "Unknown Person"
 
-            for viol in associated:
-                logger.debug("[stream=%s] track=%d -> violation '%s' identity=%s",
-                             sid8, track.track_id, viol["class_name"], identity_id)
-                self._buffer_violation(
-                    ViolationJob(
-                        stream_id       = self.stream_id,
-                        violation_type  = viol["class_name"],
-                        confidence      = viol["confidence"],
-                        person_crop_bgr = crop.copy(),
-                        person_bbox     = bbox,
-                        identity_id     = identity_id,
-                        identity_label  = identity_label,
-                    )
+            # Check if identity is ready or if we should buffer for later assignment
+            if identity_id is None:
+                # Store violation in pending buffer for later assignment
+                violation_job = ViolationJob(
+                    stream_id=self.stream_id,
+                    violation_type=viol["class_name"],
+                    confidence=viol["confidence"],
+                    person_crop_bgr=crop.copy(),
+                    person_bbox=bbox,
+                    identity_id=identity_id,
+                    identity_label=identity_label,
                 )
+
+                # Add to pending identity violations buffer
+                if track.track_id not in self._pending_identity_violations:
+                    self._pending_identity_violations[track.track_id] = []
+                self._pending_identity_violations[track.track_id].append(violation_job)
+
+                # Check if we can assign identity now
+                if track.track_id in self._pending_identity_violations and self._pending_identity_violations[track.track_id]:
+                    # Process any buffered violations
+                    buffered_violations = self._pending_identity_violations[track.track_id]
+                    for buffered_viol in buffered_violations:
+                        self._buffer_violation(buffered_viol)
 
         self.tracker.mark_missing(active_bboxes)
 
@@ -766,7 +776,7 @@ class StreamWorker:
             try:
                 # ── Embedding (blocking InsightFace call — isolated here) ──────────
                 with self.app.app_context():
-                    faces = self.pipeline.embed_crop(job.crop)
+                    faces = self.pipeline.embed_person_crop(job.crop)
 
                 now_mono = time.monotonic()
 

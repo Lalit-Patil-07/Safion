@@ -103,11 +103,6 @@ def _proto_max_similarity(
     label: str = "",
     identity_id: str = "",
 ) -> float:
-    """
-    Return the maximum cosine similarity between query and any prototype.
-    All vectors are cast to float32 before comparison.
-    Logs per-prototype scores at DEBUG level.
-    """
     if not prototypes:
         return 0.0
 
@@ -231,8 +226,7 @@ class InsightFacePipeline:
                 logger.info("InsightFace provider: CUDAExecutionProvider (GPU)")
                 return ["CUDAExecutionProvider", "CPUExecutionProvider"]
             logger.warning(
-                "PREFER_GPU=true but CUDAExecutionProvider is not available "
-                "(onnxruntime-gpu not installed or CUDA not detected). "
+                "PREFER_GPU=true but CUDAExecutionProvider is not available. "
                 "Falling back to CPUExecutionProvider."
             )
 
@@ -300,6 +294,11 @@ class InsightFacePipeline:
         return self._ready and _insight_app is not None
 
     def embed_crop(self, person_crop_bgr: np.ndarray) -> list[dict]:
+        """
+        RetinaFace + ArcFace on a BGR crop.
+        Input scale determines alignment quality — callers should normalize
+        face height to ~250px via embed_person_crop() for runtime video frames.
+        """
         if not self.is_ready or person_crop_bgr is None or person_crop_bgr.size == 0:
             return []
 
@@ -311,13 +310,18 @@ class InsightFacePipeline:
             logger.warning("InsightFace.get() error: %s", exc)
             return []
 
+        # Log number of detected faces before filtering
+        logger.debug("embed_crop: detected %d faces", len(faces))
+
         results = []
         for face in faces:
             if face.det_score < self._det_score_min or face.embedding is None:
+                logger.debug("embed_crop: face det_score=%.4f skipped due to low quality", face.det_score)
                 continue
             bbox = face.bbox.tolist() if face.bbox is not None else []
             q    = compute_quality_score(float(face.det_score), bbox, person_crop_bgr.shape)
             if q < self._quality_min:
+                logger.debug("embed_crop: face quality_score=%.4f below threshold", q)
                 continue
             emb = _unit(np.asarray(face.embedding, dtype=np.float32))
             results.append({
@@ -326,7 +330,111 @@ class InsightFacePipeline:
                 "quality_score": q,
                 "bbox":          bbox,
             })
+        logger.debug("embed_crop: %d faces passed filters", len(results))
         return results
+
+    def embed_person_crop(self, person_crop_bgr: np.ndarray) -> list[dict]:
+        """
+        Normalize face scale before embedding — matches importer Stage-2 exactly.
+
+        Problem with raw embed_crop() at runtime:
+          YOLO person crop size varies with camera distance.  Face height ranges
+          from ~30px (distant) to ~300px (close-up).  InsightFace at det_size=640
+          internally rescales the crop; variable input scale produces different
+          landmark alignment quality per frame, leading to ArcFace embeddings
+          that are mutually incompatible and incompatible with importer embeddings
+          (observed cosine similarity: -0.01 to 0.08).
+
+        This method replicates the importer's two-stage normalization:
+          Stage 1 — detect face bbox in the person crop.
+          Stage 2 — crop person-scale region (pad: 30% x, 15% top, 150% bottom),
+                    resize so face height == _TARGET_FACE_PX (250px), embed.
+
+        At 250px face height the person-scale crop is ~662px tall.
+        InsightFace scales it DOWN 0.97× (lossless); face lands at ~241px in
+        the 640px detection window — the P4 anchor centre for buffalo_l.
+        Both runtime and importer embeddings are now generated from the same
+        effective detection scale, making cosine similarity valid for matching.
+
+        Falls back to raw embed_crop(person_crop_bgr) only when Stage-1 detects
+        no face in the person crop (extreme occlusion / too-small crop).
+        """
+        _TARGET_FACE_PX = 250
+
+        if not self.is_ready or person_crop_bgr is None or person_crop_bgr.size == 0:
+            return []
+
+        # ── Stage 1: detect face bbox inside the person crop ──────────────────
+        img_rgb = cv2.cvtColor(person_crop_bgr, cv2.COLOR_BGR2RGB)
+        try:
+            with _insight_lock:
+                stage1_faces = _insight_app.get(img_rgb)
+        except Exception as exc:
+            logger.warning("embed_person_crop Stage-1 error: %s", exc)
+            return []
+
+        # Log number of Stage-1 faces detected
+        logger.debug("embed_person_crop: Stage-1 detection found %d faces", len(stage1_faces))
+
+        if not stage1_faces:
+            logger.debug(
+                "embed_person_crop: no face in person crop - falling back to raw embed_crop")
+            result = self.embed_crop(person_crop_bgr)
+            logger.debug("embed_person_crop: fallback to raw embed_crop returned %d faces", len(result))
+            return result
+
+        # Highest det_score face — person crop should contain exactly one.
+        best_face = max(stage1_faces, key=lambda f: float(f.det_score))
+        x1, y1, x2, y2 = [int(v) for v in best_face.bbox]
+        ph, pw = person_crop_bgr.shape[:2]
+
+        face_h = max(1, y2 - y1)
+        face_w = max(1, x2 - x1)
+
+        # ── Stage 2: person-scale crop (same padding as importer) ─────────────
+        pad_x        = max(1, int(face_w * 0.30))
+        pad_y_top    = max(1, int(face_h * 0.15))
+        pad_y_bottom = max(1, int(face_h * 1.50))
+
+        cx1 = max(0, x1 - pad_x)
+        cy1 = max(0, y1 - pad_y_top)
+        cx2 = min(pw, x2 + pad_x)
+        cy2 = min(ph, y2 + pad_y_bottom)
+
+        normalized_crop = person_crop_bgr[cy1:cy2, cx1:cx2]
+        if normalized_crop.size == 0:
+            logger.debug("embed_person_crop: normalized crop empty - falling back to raw embed_crop")
+            result = self.embed_crop(person_crop_bgr)
+            logger.debug("embed_person_crop: fallback returned %d faces", len(result))
+            return result
+
+        # Resize so face == _TARGET_FACE_PX tall.
+        scale  = _TARGET_FACE_PX / face_h
+        new_h  = max(1, int(normalized_crop.shape[0] * scale))
+        new_w  = max(1, int(normalized_crop.shape[1] * scale))
+        interp = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR
+        normalized_crop = cv2.resize(normalized_crop, (new_w, new_h), interpolation=interp)
+
+        logger.debug(
+            "embed_person_crop: face_h=%dpx  scale=%.3f  "
+            "crop=%dx%d  face_in_det≈%dpx",
+            face_h, scale, new_w, new_h,
+            int(_TARGET_FACE_PX * (640.0 / new_h)),
+        )
+
+        # ── Stage 2: embed the normalized crop ──────────────────────────────────────
+        stage2_results = self.embed_crop(normalized_crop)
+        logger.debug("embed_person_crop: Stage-2 embedding returned %d faces", len(stage2_results))
+
+        # If Stage-2 embedding returns no results, fallback to raw embedding
+        if not stage2_results:
+            logger.debug("embed_person_crop: Stage-2 embedding failed - falling back to raw embed_crop")
+            result = self.embed_crop(person_crop_bgr)
+            logger.debug("embed_person_crop: fallback returned %d faces", len(result))
+            return result
+
+        logger.debug("embed_person_crop: returning %d faces", len(stage2_results))
+        return stage2_results
 
     def reload_cache(self) -> int:
         from face.models import FaceIdentity
@@ -420,18 +528,9 @@ class InsightFacePipeline:
                 stream_id=stream_id,
             )
 
-        # Normalise every individual embedding defensively before any comparison.
-        normed_embs = [_unit(e) for e in embeddings]
+        normed_embs  = [_unit(e) for e in embeddings]
         best_quality = float(max(qualities))
 
-        # ── Match: compare EACH track embedding against EACH prototype ────────
-        # Do NOT average embeddings before matching. The weighted mean of track
-        # embeddings across diverse frames points toward the interior of the unit
-        # hypersphere and can have near-zero or negative dot product with every
-        # stored prototype — even the correct identity — producing scores like
-        # -0.03 and causing new-identity creation at any threshold.
-        # Correct approach: max cosine similarity across all
-        # (track_embedding × prototype) pairs per candidate identity.
         cache      = self._snapshot()
         best_id    : Optional[str] = None
         best_label : str           = ""
@@ -439,13 +538,10 @@ class InsightFacePipeline:
         best_raw   : float         = 0.0
 
         for identity_id, data in cache.items():
-            # Max similarity across every track embedding against every prototype.
             raw = max(
                 _proto_max_similarity(
-                    data["prototypes"],
-                    emb,
-                    label=data["label"],
-                    identity_id=identity_id,
+                    data["prototypes"], emb,
+                    label=data["label"], identity_id=identity_id,
                 )
                 for emb in normed_embs
             )
@@ -462,8 +558,6 @@ class InsightFacePipeline:
 
         matched = best_id and best_score >= self._threshold
 
-        # mean_emb computed here for prototype update in _patch_cache ONLY —
-        # it is never used for matching decisions above.
         emb_matrix = np.stack(normed_embs).astype(np.float32)
         w          = np.array(qualities, dtype=np.float32)
         w_sum      = w.sum()
@@ -476,14 +570,9 @@ class InsightFacePipeline:
             "match_and_store_track: n_embeddings=%d  best='%s'  "
             "raw_similarity=%.4f  temporal_bonus=%.4f  total_score=%.4f  "
             "threshold=%.4f  matched=%s  cache_size=%d",
-            len(embeddings),
-            best_label or "(none)",
-            best_raw,
-            best_score - best_raw,
-            best_score,
-            self._threshold,
-            matched,
-            len(cache),
+            len(embeddings), best_label or "(none)",
+            best_raw, best_score - best_raw, best_score,
+            self._threshold, matched, len(cache),
         )
         _log_top_candidates(cache, normed_embs[int(np.argmax(qualities))], self._threshold)
 
@@ -503,7 +592,6 @@ class InsightFacePipeline:
                 best_label, best_score, len(embeddings),
             )
 
-        # ── Store all individual embeddings ───────────────────────────────────
         quality_threshold = self._quality_min
         stored = 0
         for emb, q in zip(normed_embs, qualities):
@@ -527,7 +615,6 @@ class InsightFacePipeline:
 
         db.session.commit()
 
-        # ── Patch cache using mean_emb (prototype update only) ────────────────
         is_outlier = matched and best_raw < self._outlier_min_sim
         self._patch_cache(
             best_id, best_label, mean_emb, best_quality,
@@ -577,14 +664,10 @@ class InsightFacePipeline:
 
         logger.debug(
             "match_or_create: best='%s'  raw_similarity=%.4f  "
-            "temporal_bonus=%.4f  total_score=%.4f  threshold=%.4f  "
-            "cache_size=%d",
-            best_label or "(none)",
-            best_raw,
-            best_score - best_raw,
-            best_score,
-            self._threshold,
-            len(cache),
+            "temporal_bonus=%.4f  total_score=%.4f  threshold=%.4f  cache_size=%d",
+            best_label or "(none)", best_raw,
+            best_score - best_raw, best_score,
+            self._threshold, len(cache),
         )
         _log_top_candidates(cache, emb, self._threshold)
 
@@ -618,8 +701,7 @@ class InsightFacePipeline:
             return best_id, best_label, best_score
 
         logger.info(
-            "No match: best_raw=%.4f  threshold=%.4f  gap=%.4f  — "
-            "creating new identity",
+            "No match: best_raw=%.4f  threshold=%.4f  gap=%.4f  — creating new identity",
             best_raw, self._threshold, self._threshold - best_raw,
         )
 
