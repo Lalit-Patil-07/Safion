@@ -262,6 +262,7 @@ class StreamWorker:
 
         self._quality_improve_margin:  float = cfg["EMBED_QUALITY_IMPROVE_MARGIN"]
         self._identity_min_embs_delta: int   = cfg["IDENTITY_MIN_EMBEDDINGS_DELTA"]
+        self._identity_match_threshold:  float = cfg["IDENTITY_MATCH_THRESHOLD"]
         self._strong_match_threshold:  float = cfg["STRONG_MATCH_THRESHOLD"]
 
         # ── Violation write buffer ─────────────────────────────────────────────
@@ -270,7 +271,7 @@ class StreamWorker:
         # Coalescing drops duplicate (identity_id, violation_type) pairs that
         # arrive within _violation_coalesce_window — complementing the existing
         # per-track violation cooldown which guards the detection side.
-        self._violation_buffer:          list  = []
+        self._pending_identity_violations = {}
         self._violation_last_flush:      float = time.monotonic()
         self._violation_batch_size:      int   = cfg["VIOLATION_BATCH_SIZE"]
         self._violation_batch_timeout:   float = cfg["VIOLATION_BATCH_TIMEOUT_MS"] / 1000.0
@@ -487,35 +488,63 @@ class StreamWorker:
             # Read identity fields under lock — face worker may be writing them
             # concurrently on a different thread.
             with track.lock:
-                identity_id    = track.identity_id
-                identity_label = track.identity_label or "Unknown Person"
+                identity_id    = getattr(track, 'identity_id', None)
+                identity_label = getattr(track, 'identity_label', None) or "Unknown Person"
 
-            # Check if identity is ready or if we should buffer for later assignment
-            if identity_id is None:
-                # Store violation in pending buffer for later assignment
-                violation_job = ViolationJob(
-                    stream_id=self.stream_id,
-                    violation_type=viol["class_name"],
-                    confidence=viol["confidence"],
-                    person_crop_bgr=crop.copy(),
-                    person_bbox=bbox,
-                    identity_id=identity_id,
-                    identity_label=identity_label,
-                )
+            # Process each associated violation (should be one for each associated violation)
+            for viol in associated:
+                # Check if identity is ready or if we should buffer for later assignment
+                if identity_id is None:
+                    # Store violation in pending buffer for later assignment
+                    violation_job = ViolationJob(
+                        stream_id=self.stream_id,
+                        violation_type=viol["class_name"],
+                        confidence=viol["confidence"],
+                        person_crop_bgr=crop.copy(),
+                        person_bbox=bbox,
+                        identity_id=identity_id,
+                        identity_label=identity_label,
+                    )
 
-                # Add to pending identity violations buffer
-                if track.track_id not in self._pending_identity_violations:
-                    self._pending_identity_violations[track.track_id] = []
-                self._pending_identity_violations[track.track_id].append(violation_job)
+                    # Add to pending identity violations buffer
+                    if track.track_id not in self._pending_identity_violations:
+                        self._pending_identity_violations[track.track_id] = []
+                    self._pending_identity_violations[track.track_id].append(violation_job)
+                else:
+                    # Process violation normally using _buffer_violation()
+                    violation_job = ViolationJob(
+                        stream_id=self.stream_id,
+                        violation_type=viol["class_name"],
+                        confidence=viol["confidence"],
+                        person_crop_bgr=crop.copy(),
+                        person_bbox=bbox,
+                        identity_id=identity_id,
+                        identity_label=identity_label,
+                    )
+                    self._buffer_violation(violation_job)
 
-                # Check if we can assign identity now
-                if track.track_id in self._pending_identity_violations and self._pending_identity_violations[track.track_id]:
-                    # Process any buffered violations
-                    buffered_violations = self._pending_identity_violations[track.track_id]
-                    for buffered_viol in buffered_violations:
-                        self._buffer_violation(buffered_viol)
+        # Get tracks that will be removed
+        active_before = set(t.track_id for t in self.tracker.active_tracks())
 
         self.tracker.mark_missing(active_bboxes)
+
+        # Get tracks that remain after marking missing
+        active_after = set(t.track_id for t in self.tracker.active_tracks())
+
+        # Handle track termination: flush buffered violations for removed tracks
+        removed_tracks = active_before - active_after
+
+        # Handle track termination: flush buffered violations for removed tracks
+        removed_tracks = tracks_before - tracks_after
+        for track_id in removed_tracks:
+            if track_id in self._pending_identity_violations:
+                # Assign identity_label = "Unknown Person" and flush buffered violations
+                buffered_violations = self._pending_identity_violations[track_id]
+                for buffered_viol in buffered_violations:
+                    buffered_viol.identity_label = "Unknown Person"
+                    self._buffer_violation(buffered_viol)
+                # Remove buffer entry
+                del self._pending_identity_violations[track_id]
 
         self._frame_count += 1
 
@@ -868,6 +897,26 @@ class StreamWorker:
                                 "[stream=%s] track=%d -> '%s' (score=%.3f)",
                                 sid8, job.track.track_id, label, score,
                             )
+
+                            # When track.identity_id becomes available, flush buffered violations
+                            if job.track.track_id in self._pending_identity_violations:
+                                # Check minimum stability condition before flushing
+                                # Only flush if: len(track embeddings) >= 2 OR match score >= IDENTITY_MATCH_THRESHOLD
+                                embeddings_count = job.track.n_embeddings
+                                match_score = score
+                                IDENTITY_MATCH_THRESHOLD = self._identity_match_threshold
+
+                                if embeddings_count >= 2 or match_score >= IDENTITY_MATCH_THRESHOLD:
+                                    # Process buffered violations for this track
+
+                                    buffered_violations = self._pending_identity_violations[job.track.track_id]
+                                    for buffered_viol in buffered_violations:
+                                        # Set identity_id and identity_label for buffered violations
+                                        buffered_viol.identity_id = identity_id
+                                        buffered_viol.identity_label = label
+                                        self._buffer_violation(buffered_viol)
+                                    # Delete buffer entry
+                                    del self._pending_identity_violations[job.track.track_id]
                         else:
                             logger.debug(
                                 "[stream=%s] track=%d identity already assigned — skipping race result",
