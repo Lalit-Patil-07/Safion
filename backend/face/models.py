@@ -1,14 +1,3 @@
-"""
-Face + Violation models — v2.0 (production schema)
-
-Changes from v1.3
------------------
-- FaceIdentity  : added updated_at, metadata JSON
-- FaceEmbedding : added composite index (identity_id, created_at),
-                  stream_id index already present — kept
-- Violation     : added metadata JSON, composite indexes on hot query paths
-- StreamEvent   : NEW table for analytics / audit trail
-"""
 import threading
 import uuid
 from datetime import datetime, timezone
@@ -27,8 +16,6 @@ def _now():    return datetime.now(timezone.utc)
 _label_lock = threading.Lock()
 
 
-# ── FaceIdentity ──────────────────────────────────────────────────────────────
-
 class FaceIdentity(db.Model):
     __tablename__  = "face_identities"
     __table_args__ = (
@@ -36,7 +23,6 @@ class FaceIdentity(db.Model):
         Index("ix_fi_is_archived",         "is_archived"),
         Index("ix_fi_last_seen",           "last_seen"),
         Index("ix_fi_created_at",          "created_at"),
-        # Composite: most common dashboard query — active, unconfirmed, recent
         Index("ix_fi_active_unconfirmed",  "is_archived", "is_confirmed", "last_seen"),
         {"extend_existing": True},
     )
@@ -59,8 +45,6 @@ class FaceIdentity(db.Model):
     thumbnail_filename  = db.Column(db.Text, nullable=True)
     identity_confidence = db.Column(db.Float, nullable=False, default=0.0)
 
-    # Flexible store for future attributes (helmet colour, location zone, etc.)
-    # JSONB is indexed by PostgreSQL natively; no schema change needed to add keys.
     meta = db.Column(JSONB, nullable=True, default=None)
 
     embeddings = db.relationship(
@@ -76,8 +60,6 @@ class FaceIdentity(db.Model):
         "StreamEvent", backref="identity", lazy="dynamic",
         foreign_keys="StreamEvent.identity_id",
     )
-
-    # ── label helpers (unchanged) ─────────────────────────────────────────────
 
     @staticmethod
     def next_label() -> str:
@@ -98,8 +80,6 @@ class FaceIdentity(db.Model):
             db.session.add(identity)
             db.session.flush()
             return identity
-
-    # ── serialisation (unchanged + updated_at) ────────────────────────────────
 
     def to_dict(self) -> dict:
         thumbnail = (
@@ -137,16 +117,11 @@ class FaceIdentity(db.Model):
         }
 
 
-# ── FaceEmbedding ─────────────────────────────────────────────────────────────
-
 class FaceEmbedding(db.Model):
     __tablename__  = "face_embeddings"
     __table_args__ = (
-        # Primary lookup: all embeddings for an identity ordered by recency
         Index("ix_fe_identity_created", "identity_id", "created_at"),
-        # Quality filter: reload_cache() fetches high-quality embeddings first
         Index("ix_fe_identity_quality", "identity_id", "quality_score"),
-        # Stream audit: which embeddings came from which stream
         Index("ix_fe_stream_id",        "stream_id"),
         {"extend_existing": True},
     )
@@ -157,17 +132,21 @@ class FaceEmbedding(db.Model):
         nullable=True,
     )
 
-    # pgvector 512-dim L2-normalised ArcFace embedding
     embedding_vec = db.Column(Vector(512), nullable=False)
 
-    det_score     = db.Column(db.Float,     nullable=True)
-    quality_score = db.Column(db.Float,     nullable=True)
+    det_score     = db.Column(db.Float,      nullable=True)
+    quality_score = db.Column(db.Float,      nullable=True)
     stream_id     = db.Column(db.String(36), nullable=True)
     created_at    = db.Column(db.DateTime(timezone=True), nullable=False, default=_now)
 
     @property
     def embedding(self) -> np.ndarray:
-        return np.asarray(self.embedding_vec, dtype=np.float32)
+        # pgvector may return a Python list or a float64 array; force float32.
+        arr = np.asarray(self.embedding_vec, dtype=np.float32).ravel()
+        # Re-normalise: pgvector float32 round-trip introduces norm drift that
+        # causes dot products to silently fall below true cosine similarity.
+        norm = np.linalg.norm(arr)
+        return arr / norm if norm > 0 else arr
 
     @embedding.setter
     def embedding(self, value: np.ndarray) -> None:
@@ -176,16 +155,11 @@ class FaceEmbedding(db.Model):
         self.embedding_vec = (arr / norm if norm > 0 else arr).tolist()
 
 
-# ── Violation ─────────────────────────────────────────────────────────────────
-
 class Violation(db.Model):
     __tablename__  = "violations"
     __table_args__ = (
-        # Most common query: recent violations for a given identity
-        Index("ix_viol_identity_timestamp",  "identity_id",   "timestamp"),
-        # Dashboard time-range filter by type
+        Index("ix_viol_identity_timestamp",  "identity_id",    "timestamp"),
         Index("ix_viol_type_timestamp",      "violation_type", "timestamp"),
-        # Stream-level reporting
         Index("ix_viol_stream_timestamp",    "stream_id",      "timestamp"),
         {"extend_existing": True},
     )
@@ -198,11 +172,10 @@ class Violation(db.Model):
         db.String(36), db.ForeignKey("face_identities.id"),
         nullable=True,
     )
-    match_score    = db.Column(db.Float,     nullable=True)
+    match_score    = db.Column(db.Float,      nullable=True)
     stream_id      = db.Column(db.String(36), nullable=True)
-    image_filename = db.Column(db.Text,      nullable=True)
+    image_filename = db.Column(db.Text,       nullable=True)
 
-    # Extensible store: bbox coords, zone id, PPE class metadata, etc.
     meta = db.Column(JSONB, nullable=True, default=None)
 
     def to_dict(self) -> dict:
@@ -221,25 +194,7 @@ class Violation(db.Model):
         }
 
 
-# ── StreamEvent (NEW) ─────────────────────────────────────────────────────────
-
 class StreamEvent(db.Model):
-    """
-    Immutable audit / analytics log for stream-level activity.
-
-    One row per significant event: track confirmed, identity matched,
-    violation triggered, track lost, stream started/stopped.
-
-    Design notes
-    ------------
-    - Append-only: never UPDATE rows; write new rows instead.
-    - identity_id is nullable — events fire before identity is resolved.
-    - meta JSONB stores event-specific payload without schema churn.
-    - Composite indexes cover the two dominant query shapes:
-        1. All events for a stream in a time range   (stream_id, timestamp)
-        2. All events for an identity across streams (identity_id, timestamp)
-    """
-
     __tablename__  = "stream_events"
     __table_args__ = (
         Index("ix_se_stream_timestamp",   "stream_id",   "timestamp"),
@@ -249,7 +204,6 @@ class StreamEvent(db.Model):
         {"extend_existing": True},
     )
 
-    # Event type constants — use these in application code, not raw strings
     EVT_TRACK_CONFIRMED   = "track_confirmed"
     EVT_IDENTITY_MATCHED  = "identity_matched"
     EVT_IDENTITY_CREATED  = "identity_created"
@@ -260,7 +214,7 @@ class StreamEvent(db.Model):
 
     id          = db.Column(db.String(36), primary_key=True, default=_new_id)
     stream_id   = db.Column(db.String(36), nullable=False)
-    track_id    = db.Column(db.Integer,    nullable=True)   # tracker Track.track_id
+    track_id    = db.Column(db.Integer,    nullable=True)
     identity_id = db.Column(
         db.String(36), db.ForeignKey("face_identities.id"),
         nullable=True,
@@ -269,7 +223,6 @@ class StreamEvent(db.Model):
     timestamp   = db.Column(db.DateTime(timezone=True), nullable=False, default=_now, index=True)
     confidence  = db.Column(db.Float, nullable=True)
 
-    # Flexible payload: match_score, bbox, violation_type, frame_count, etc.
     meta = db.Column(JSONB, nullable=True, default=None)
 
     def to_dict(self) -> dict:

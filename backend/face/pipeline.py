@@ -1,39 +1,3 @@
-"""
-InsightFacePipeline  — v3  (multi-prototype)
-=============================================
-Model  : buffalo_l (InsightFace)
-Detect : RetinaFace
-Embed  : ArcFace 512-dim L2-normalised
-
-Changes from v2 (single centroid)
------------------------------------
-MULTI-PROTOTYPE CACHE
-  Each identity now stores up to MAX_PROTOTYPES representative vectors instead
-  of a single weighted centroid.  Prototypes capture distinct appearance modes
-  (frontal / profile, with helmet / without, day / night lighting).
-
-  Prototype update rules (incremental, O(K) per violation):
-    1. Compute similarity to every existing prototype.
-    2. If best_sim >= PROTO_MERGE_THRESHOLD (same viewing condition):
-         weighted-average-merge into that prototype.
-    3. Else if len(prototypes) < MAX_PROTOTYPES:
-         add as a new prototype.
-    4. Else (at capacity, genuinely novel view):
-         replace the weakest prototype only if new quality is higher.
-
-  reload_cache() rebuilds prototypes from stored embeddings using the same
-  greedy algorithm, seeded from highest-quality embeddings first.
-
-MATCHING
-  match_or_create() scores each identity by the MAX similarity across all its
-  prototypes.  One strong match against any prototype is sufficient.
-  Outlier check and centroid-update guard are preserved.
-
-SIMILARITY ENGINE SUPPORT
-  _snapshot() now includes "is_confirmed" and "is_archived" flags so the
-  similarity engine (face/similarity.py) can filter without a DB round-trip.
-"""
-
 from __future__ import annotations
 
 import logging
@@ -50,21 +14,12 @@ _insight_app  = None
 _insight_lock = threading.Lock()
 
 
-# ── Normalisation helper ──────────────────────────────────────────────────────
-
 def _unit(vec: np.ndarray) -> np.ndarray:
-    """
-    Return a L2-normalised copy of vec.
-    Safe: returns vec unchanged if norm is zero.
-    Applied defensively at every boundary where vectors cross a serialisation
-    boundary (pgvector round-trip, weighted merge, incoming embedding).
-    """
     arr  = np.asarray(vec, dtype=np.float32).ravel()
     norm = np.linalg.norm(arr)
     return arr / norm if norm > 0 else arr
 
 
-# ── RW lock ───────────────────────────────────────────────────────────────────
 class _RWLock:
     def __init__(self):
         self._cond    = threading.Condition(threading.Lock())
@@ -95,12 +50,7 @@ class _RWLock:
     def write(self): return self._W(self)
 
 
-# ── Quality scoring (unchanged from v2) ──────────────────────────────────────
 def compute_quality_score(det_score: float, bbox: list, image_shape: tuple) -> float:
-    """
-    Combined embedding quality: det_score × 0.7 + face_area_ratio × 0.3
-    Range [0, 1].
-    """
     if not bbox or len(bbox) < 4 or not image_shape:
         return float(det_score)
 
@@ -112,38 +62,15 @@ def compute_quality_score(det_score: float, bbox: list, image_shape: tuple) -> f
     return float(np.clip(det_score * 0.7 + area_score * 0.3, 0.0, 1.0))
 
 
-# ── Prototype helpers ─────────────────────────────────────────────────────────
 def _build_prototypes(
     rows,
     max_k: int,
     merge_threshold: float,
 ) -> list[dict]:
-    """
-    Build up to max_k representative prototypes from FaceEmbedding rows.
-
-    Defensive normalisation is applied to every embedding retrieved from the
-    DB before it enters the prototype set.  pgvector stores float32 lists;
-    the round-trip through Python may introduce sub-epsilon norm drift that
-    silently degrades cosine dot-product accuracy.
-
-    Algorithm
-    ---------
-    1. Sort rows by quality_score descending.
-    2. For each embedding, check similarity against current prototypes.
-       - If any prototype is within merge_threshold: weighted-merge.
-       - Else if under capacity: add new prototype.
-       - Else: skip (at capacity, this embedding doesn't add a new view).
-
-    Returns list of {"vec": ndarray(512), "weight": float, "count": int}.
-    """
     rows_sorted = sorted(rows, key=lambda r: r.quality_score or 0.0, reverse=True)
     prototypes: list[dict] = []
 
     for row in rows_sorted:
-        # Defensive re-normalise after pgvector round-trip.
-        # The setter already writes a unit vector, but float32 list→pgvector→
-        # np.asarray conversion can introduce tiny norm drift (|norm-1| up to 1e-6).
-        # Re-normalising here ensures dot-products are true cosine similarities.
         emb = _unit(row.embedding)
         q   = float(row.quality_score or 0.5)
 
@@ -161,12 +88,11 @@ def _build_prototypes(
             w_old = p["weight"] * p["count"]
             w_new = q
             combined = p["vec"] * w_old + emb * w_new
-            p["vec"]    = _unit(combined)          # always re-normalise after merge
+            p["vec"]    = _unit(combined)
             p["count"] += 1
             p["weight"]  = (w_old + w_new) / p["count"]
         elif len(prototypes) < max_k:
             prototypes.append({"vec": emb, "weight": q, "count": 1})
-        # else: at capacity and genuinely different — skip
 
     return prototypes
 
@@ -174,15 +100,32 @@ def _build_prototypes(
 def _proto_max_similarity(
     prototypes: list[dict],
     query: np.ndarray,
+    label: str = "",
+    identity_id: str = "",
 ) -> float:
     """
     Return the maximum cosine similarity between query and any prototype.
-    Both prototypes and query must be L2-normalised unit vectors.
+    All vectors are cast to float32 before comparison.
+    Logs per-prototype scores at DEBUG level.
     """
     if not prototypes:
         return 0.0
-    vecs = np.stack([p["vec"] for p in prototypes])
-    return float(np.max(vecs @ query))
+
+    query = np.asarray(query, dtype=np.float32).ravel()
+    vecs  = np.stack([
+        np.asarray(p["vec"], dtype=np.float32).ravel() for p in prototypes
+    ])
+    sims  = (vecs @ query).ravel()
+    best  = float(np.max(sims))
+
+    logger.debug(
+        "  [proto_sim] identity=%s label=%s scores=%s max=%.4f",
+        identity_id[:8] if identity_id else "?",
+        label,
+        [f"{s:.4f}" for s in sims.tolist()],
+        best,
+    )
+    return best
 
 
 def _update_prototypes(
@@ -192,10 +135,6 @@ def _update_prototypes(
     max_k: int,
     merge_threshold: float,
 ) -> None:
-    """
-    In-place incremental prototype update.  Called from _patch_cache().
-    new_emb must be a unit vector.
-    """
     if not prototypes:
         prototypes.append({"vec": new_emb.copy(), "weight": quality, "count": 1})
         return
@@ -210,7 +149,7 @@ def _update_prototypes(
         w_old = p["weight"] * p["count"]
         w_new = quality
         combined = p["vec"] * w_old + new_emb * w_new
-        p["vec"]    = _unit(combined)              # re-normalise after merge
+        p["vec"]    = _unit(combined)
         p["count"] += 1
         p["weight"]  = (w_old + w_new) / p["count"]
 
@@ -218,7 +157,6 @@ def _update_prototypes(
         prototypes.append({"vec": new_emb.copy(), "weight": quality, "count": 1})
 
     else:
-        # At capacity — replace weakest prototype if incoming quality is higher
         weights  = [p["weight"] for p in prototypes]
         min_idx  = int(np.argmin(weights))
         if quality > prototypes[min_idx]["weight"]:
@@ -226,10 +164,6 @@ def _update_prototypes(
 
 
 def _temporal_bonus(data: dict, recent_window: float, boost: float) -> float:
-    """
-    Return `boost` if this identity was seen within `recent_window` seconds,
-    else 0.0.  Runs in O(1) from in-memory cache — no DB reads.
-    """
     last_seen = data.get("last_seen", 0.0)
     if last_seen and (time.time() - last_seen) < recent_window:
         return boost
@@ -242,16 +176,13 @@ def _log_top_candidates(
     threshold: float,
     n: int = 3,
 ) -> None:
-    """
-    Emit a DEBUG log line for the top-N candidates by raw prototype similarity.
-    Excludes the temporal bonus so scores are directly comparable to the threshold.
-    Called from both match_or_create() and match_and_store_track().
-    """
     if not logger.isEnabledFor(logging.DEBUG) or not cache:
         return
 
     scores = [
-        (iid, data["label"], _proto_max_similarity(data["prototypes"], query),
+        (iid, data["label"],
+         _proto_max_similarity(data["prototypes"], query,
+                               label=data["label"], identity_id=iid),
          len(data["prototypes"]))
         for iid, data in cache.items()
     ]
@@ -268,21 +199,7 @@ def _log_top_candidates(
         logger.debug("  (cache is empty — no candidates)")
 
 
-# ── Pipeline ──────────────────────────────────────────────────────────────────
 class InsightFacePipeline:
-    """
-    Cache entry structure (v3):
-    {
-        identity_id: {
-            "label":        str,
-            "prototypes":   [{"vec": ndarray(512), "weight": float, "count": int}, ...],
-            "confidence":   float,   # running mean of match scores
-            "n_matches":    int,
-            "is_confirmed": bool,    # for similarity engine — no DB round-trip needed
-            "is_archived":  bool,
-        }
-    }
-    """
 
     def __init__(self, config) -> None:
         self._model_name             = config["INSIGHTFACE_MODEL"]
@@ -301,14 +218,8 @@ class InsightFacePipeline:
         self._cache: dict     = {}
         self._ready           = False
 
-    # ── Init ──────────────────────────────────────────────────────────────────
     @staticmethod
     def _select_providers(prefer_gpu: bool) -> list[str]:
-        """
-        Detect available ONNXRuntime providers at runtime and return
-        the provider list to pass to FaceAnalysis.
-        Never silently falls back — always logs the chosen provider.
-        """
         try:
             import onnxruntime as ort
             available = ort.get_available_providers()
@@ -332,7 +243,7 @@ class InsightFacePipeline:
         global _insight_app
         try:
             try:
-                import torch  # noqa: F401  — side-effect: preloads CUDA DLLs
+                import torch  # noqa: F401
                 logger.info("torch %s preloaded (CUDA available: %s)",
                             torch.__version__, torch.cuda.is_available())
             except ImportError:
@@ -362,11 +273,7 @@ class InsightFacePipeline:
                     logger.info("InsightFace loaded — active session providers: %s", active)
                     if self._prefer_gpu and "CUDAExecutionProvider" not in active:
                         logger.error(
-                            "PREFER_GPU=true but InsightFace session is using %s, not GPU. "
-                            "Likely cause: onnxruntime-gpu not installed, or CUDA DLL mismatch "
-                            "(libcublasLt.so.12 not found). "
-                            "Install torch with cu124 index URL and onnxruntime-gpu>=1.24.0 — "
-                            "see README ONNXRuntime Setup section.",
+                            "PREFER_GPU=true but InsightFace session is using %s, not GPU.",
                             active,
                         )
             self._ready = True
@@ -392,14 +299,7 @@ class InsightFacePipeline:
     def is_ready(self) -> bool:
         return self._ready and _insight_app is not None
 
-    # ── Embedding extraction ──────────────────────────────────────────────────
     def embed_crop(self, person_crop_bgr: np.ndarray) -> list[dict]:
-        """
-        RetinaFace + ArcFace on a BGR person-bbox crop.
-        Returns [{"embedding", "det_score", "quality_score", "bbox"}].
-        All returned embeddings are L2-normalised float32 unit vectors.
-        Faces below quality_min are dropped.
-        """
         if not self.is_ready or person_crop_bgr is None or person_crop_bgr.size == 0:
             return []
 
@@ -419,8 +319,6 @@ class InsightFacePipeline:
             q    = compute_quality_score(float(face.det_score), bbox, person_crop_bgr.shape)
             if q < self._quality_min:
                 continue
-            # Always normalise here — this is the canonical entry point for
-            # live embeddings.  All downstream code assumes unit vectors.
             emb = _unit(np.asarray(face.embedding, dtype=np.float32))
             results.append({
                 "embedding":     emb,
@@ -430,14 +328,7 @@ class InsightFacePipeline:
             })
         return results
 
-    # ── Full cache rebuild ────────────────────────────────────────────────────
     def reload_cache(self) -> int:
-        """
-        Rebuild multi-prototype cache from DB.  Call at startup and post-clustering.
-        Embeddings are re-normalised defensively after the pgvector round-trip
-        inside _build_prototypes(), so prototype dot-products are true cosine
-        similarities regardless of any float32 drift introduced by pgvector.
-        """
         from face.models import FaceIdentity
 
         identities = FaceIdentity.query.filter_by(is_archived=False).all()
@@ -470,7 +361,6 @@ class InsightFacePipeline:
         )
         return len(new)
 
-    # ── Incremental cache patch ───────────────────────────────────────────────
     def _patch_cache(
         self,
         identity_id: str,
@@ -481,12 +371,7 @@ class InsightFacePipeline:
         update_prototypes: bool = True,
         is_confirmed: bool = False,
     ) -> None:
-        """
-        Incremental prototype update.  O(K) — no DB reads.
-        new_embedding must be a unit vector (caller is responsible).
-        If update_prototypes=False (outlier), only confidence/n_matches are updated.
-        """
-        emb = _unit(new_embedding)   # defensive guard before entering cache
+        emb = _unit(new_embedding)
 
         with self._rw.write():
             entry = self._cache.get(identity_id)
@@ -519,47 +404,56 @@ class InsightFacePipeline:
                     self._proto_merge,
                 )
 
-    # ── Track-level match + store ─────────────────────────────────────────────
     def match_and_store_track(
         self,
         embeddings: list,
         qualities: list,
         stream_id: Optional[str] = None,
     ) -> tuple[str, str, float]:
-        """
-        Called at track confirmation.  See inline comments for design rationale.
-        Returns (identity_id, label, match_score).
-        """
         from face.models import FaceIdentity, FaceEmbedding
         from extensions import db
 
         if not embeddings or not qualities:
-            return self.match_or_create(embeddings[0] if embeddings else None,
-                                        qualities[0] if qualities else 0.0,
-                                        stream_id=stream_id)
+            return self.match_or_create(
+                embeddings[0] if embeddings else None,
+                qualities[0] if qualities else 0.0,
+                stream_id=stream_id,
+            )
 
-        # ── Step 1: quality-weighted mean for matching ────────────────────────
-        # Normalise each individual embedding defensively before stacking.
+        # Normalise every individual embedding defensively before any comparison.
         normed_embs = [_unit(e) for e in embeddings]
-        emb_matrix  = np.stack(normed_embs).astype(np.float32)
-        w           = np.array(qualities, dtype=np.float32)
-        w_sum       = w.sum()
-        mean_emb    = (emb_matrix * (w / w_sum)[:, None]).sum(axis=0) if w_sum > 0 \
-                      else emb_matrix.mean(axis=0)
-        mean_emb    = _unit(mean_emb)   # weighted mean is NOT a unit vector; normalise
-
         best_quality = float(max(qualities))
 
-        # ── Step 2: match mean against cache ─────────────────────────────────
+        # ── Match: compare EACH track embedding against EACH prototype ────────
+        # Do NOT average embeddings before matching. The weighted mean of track
+        # embeddings across diverse frames points toward the interior of the unit
+        # hypersphere and can have near-zero or negative dot product with every
+        # stored prototype — even the correct identity — producing scores like
+        # -0.03 and causing new-identity creation at any threshold.
+        # Correct approach: max cosine similarity across all
+        # (track_embedding × prototype) pairs per candidate identity.
         cache      = self._snapshot()
         best_id    : Optional[str] = None
         best_label : str           = ""
         best_score : float         = 0.0
-        best_raw   : float         = 0.0   # score without temporal bonus (for logging)
+        best_raw   : float         = 0.0
 
         for identity_id, data in cache.items():
-            raw   = _proto_max_similarity(data["prototypes"], mean_emb)
+            # Max similarity across every track embedding against every prototype.
+            raw = max(
+                _proto_max_similarity(
+                    data["prototypes"],
+                    emb,
+                    label=data["label"],
+                    identity_id=identity_id,
+                )
+                for emb in normed_embs
+            )
             score = raw + _temporal_bonus(data, self._recent_window, self._temporal_boost)
+            logger.debug(
+                "  [match_track] candidate='%s' raw=%.4f bonus=%.4f total=%.4f threshold=%.4f",
+                data["label"], raw, score - raw, score, self._threshold,
+            )
             if score > best_score:
                 best_score = score
                 best_raw   = raw
@@ -567,6 +461,16 @@ class InsightFacePipeline:
                 best_label = data["label"]
 
         matched = best_id and best_score >= self._threshold
+
+        # mean_emb computed here for prototype update in _patch_cache ONLY —
+        # it is never used for matching decisions above.
+        emb_matrix = np.stack(normed_embs).astype(np.float32)
+        w          = np.array(qualities, dtype=np.float32)
+        w_sum      = w.sum()
+        mean_emb   = _unit(
+            (emb_matrix * (w / w_sum)[:, None]).sum(axis=0)
+            if w_sum > 0 else emb_matrix.mean(axis=0)
+        )
 
         logger.debug(
             "match_and_store_track: n_embeddings=%d  best='%s'  "
@@ -581,7 +485,7 @@ class InsightFacePipeline:
             matched,
             len(cache),
         )
-        _log_top_candidates(cache, mean_emb, self._threshold)
+        _log_top_candidates(cache, normed_embs[int(np.argmax(qualities))], self._threshold)
 
         if not matched:
             identity   = FaceIdentity.create_auto()
@@ -589,7 +493,7 @@ class InsightFacePipeline:
             best_id    = identity.id
             best_score = 0.0
             logger.info(
-                "New identity from track: '%s'  (mean_quality=%.3f  n_embs=%d  "
+                "New identity from track: '%s'  (best_quality=%.3f  n_embs=%d  "
                 "best_rejected_score=%.4f  threshold=%.4f)",
                 best_label, best_quality, len(embeddings), best_raw, self._threshold,
             )
@@ -599,14 +503,14 @@ class InsightFacePipeline:
                 best_label, best_score, len(embeddings),
             )
 
-        # ── Step 3: store ALL individual embeddings ───────────────────────────
+        # ── Store all individual embeddings ───────────────────────────────────
         quality_threshold = self._quality_min
         stored = 0
         for emb, q in zip(normed_embs, qualities):
             if q < quality_threshold:
                 continue
             row               = FaceEmbedding(identity_id=best_id, stream_id=stream_id)
-            row.embedding     = emb   # setter: final normalise + pgvector store
+            row.embedding     = emb
             row.det_score     = q
             row.quality_score = q
             db.session.add(row)
@@ -623,7 +527,7 @@ class InsightFacePipeline:
 
         db.session.commit()
 
-        # ── Step 4: patch cache ───────────────────────────────────────────────
+        # ── Patch cache using mean_emb (prototype update only) ────────────────
         is_outlier = matched and best_raw < self._outlier_min_sim
         self._patch_cache(
             best_id, best_label, mean_emb, best_quality,
@@ -638,34 +542,15 @@ class InsightFacePipeline:
         )
         return best_id, best_label, best_score
 
-    # ── Match / create ────────────────────────────────────────────────────────
     def match_or_create(
         self,
         embedding: np.ndarray,
         quality: float,
         stream_id: Optional[str] = None,
     ) -> tuple[str, str, float]:
-        """
-        Match embedding against multi-prototype cache.
-
-        Scoring: best_score = max cosine similarity across all prototypes of each
-        identity, plus an optional temporal bonus for recently-seen identities.
-
-        Outlier guard: if match >= threshold but < outlier_min_sim, store
-        embedding in DB (helps clustering) but do NOT update prototypes.
-
-        All embedding vectors are defensively normalised before matching so that
-        the dot-product is always a true cosine similarity in [-1, 1].
-
-        Returns (identity_id, label, match_score).
-        score = 0.0 on new identity creation.
-        """
         from face.models import FaceIdentity, FaceEmbedding
         from extensions import db
 
-        # Defensive normalise — embedding crosses a serialisation boundary
-        # (embed_crop already normalises, but callers from the task queue or
-        # the importer may pass unnormalised vectors).
         emb = _unit(np.asarray(embedding, dtype=np.float32))
 
         cache      = self._snapshot()
@@ -675,8 +560,15 @@ class InsightFacePipeline:
         best_raw   : float         = 0.0
 
         for identity_id, data in cache.items():
-            raw   = _proto_max_similarity(data["prototypes"], emb)
+            raw   = _proto_max_similarity(
+                data["prototypes"], emb,
+                label=data["label"], identity_id=identity_id,
+            )
             score = raw + _temporal_bonus(data, self._recent_window, self._temporal_boost)
+            logger.debug(
+                "  [match_or_create] candidate='%s' raw=%.4f bonus=%.4f total=%.4f",
+                data["label"], raw, score - raw, score,
+            )
             if score > best_score:
                 best_score = score
                 best_raw   = raw
@@ -725,11 +617,9 @@ class InsightFacePipeline:
             )
             return best_id, best_label, best_score
 
-        # No match — log clearly so admins can tune thresholds
         logger.info(
             "No match: best_raw=%.4f  threshold=%.4f  gap=%.4f  — "
-            "creating new identity  (consider lowering IDENTITY_MATCH_THRESHOLD "
-            "if this identity is known)",
+            "creating new identity",
             best_raw, self._threshold, self._threshold - best_raw,
         )
 
@@ -748,6 +638,5 @@ class InsightFacePipeline:
         return identity.id, label, 0.0
 
     def _snapshot(self) -> dict:
-        """Thread-safe shallow copy.  Prototype lists are shared read-only."""
         with self._rw.read():
             return {k: {**v} for k, v in self._cache.items()}
