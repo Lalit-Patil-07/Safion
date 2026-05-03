@@ -27,6 +27,8 @@ services:
       # .env keeps DB_HOST=localhost for local development — this takes precedence
       # inside Docker without requiring a separate .env file.
       DB_HOST: db
+      # Force identity path to match the volume mount below, regardless of .env
+      IDENTITY_STORAGE_PATH: /app/backend/identity_storage
     ports:
       - "5000:5000"
     volumes:
