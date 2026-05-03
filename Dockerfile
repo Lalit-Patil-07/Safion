@@ -29,13 +29,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Install Python dependencies before copying source (layer cache)
 COPY backend/requirements.txt ./
-RUN pip3 install --no-cache-dir -r requirements.txt
+RUN pip3 install --no-cache-dir -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cu128
 
 # Copy application source
 COPY backend/ ./
 
 # Copy compiled frontend into the location Flask serves static files from
-COPY --from=frontend-builder /app/frontend/build ./static
+COPY --from=frontend-builder /app/frontend/build /app/frontend/build
 
 # Model weights — placed at /app/best.pt, consistent with MODEL_PATH=../best.pt
 COPY best.pt /app/best.pt
@@ -47,4 +47,4 @@ COPY best.pt /app/best.pt
 
 EXPOSE 5000
 
-CMD ["python3", "run.py"]
+CMD ["gunicorn", "app:create_app()", "-w", "1", "-b", "0.0.0.0:5000", "--timeout", "120"]
