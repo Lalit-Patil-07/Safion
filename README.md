@@ -21,17 +21,41 @@ Safion is a real-time Personal Protective Equipment (PPE) detection system desig
 - **Database**: PostgreSQL 18 with pgvector
 - **Containerization**: Docker
 
+## 🏗️ Architecture Overview
+
+Safion can be run in two different ways depending on your needs:
+
+- **Docker Deployment (Recommended/Production):** Uses a multi-stage Docker build. The React frontend is compiled into static assets and served directly by the Flask backend running under Gunicorn on port `5000`. This requires only a single entry point.
+- **Local Development:** Runs as two separate servers. The Flask API runs on port `5000`, and a Node.js React development server runs on port `3000`. This provides hot-reloading for frontend development.
+
+## ⚙️ Environment Setup & Configuration
+
+Before running the application, you must configure your environment variables.
+
+```bash
+cp .env.example .env
+```
+
+### Key Environment Variables
+
+- **Database Connection**: Do not use a single `DATABASE_URL`. Ensure the discrete variables are set: `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, and `DB_PASSWORD`.
+- **First-Run Bootstrap Credentials**: The first time the backend starts, it will attempt to create an initial admin user. You **must** set `DEFAULT_ADMIN_USERNAME` and `DEFAULT_ADMIN_PASSWORD` in your `.env` to log in for the first time.
+- **Frontend API URL**:
+  - For **Docker**, leave `REACT_APP_API_URL` empty (it defaults to the same host).
+  - For **Local Development**, you **must set** `REACT_APP_API_URL=http://localhost:5000` to allow the React dev server (port 3000) to communicate with the Flask backend.
+
 ## 🚀 Getting Started
 
 ### Option 1: Docker Deployment (Recommended)
 
-**Prerequisites:** Docker with NVIDIA Container Toolkit installed.
+**Prerequisites:** Docker with **NVIDIA Container Toolkit** installed.
+> ⚠️ **Strict Requirement:** The `docker-compose.yml` uses GPU resource reservations. Without the NVIDIA Container Toolkit installed and configured on your host, the container will fail to start.
 
-> Docker deployment uses a pgvector-enabled PostgreSQL container (`pgvector/pgvector:pg16`).
-> No manual PostgreSQL or pgvector installation is required.
+> Docker deployment uses a pgvector-enabled PostgreSQL container (`pgvector/pgvector:pg18`). No manual PostgreSQL installation is required.
+> **Note on AI Model:** The `best.pt` YOLO model weights are baked directly into the Docker image. If you update the model file, you must rebuild the image.
 
 ```bash
-cp .env.example .env          # edit secrets if needed
+cp .env.example .env          # ensure DB_* and DEFAULT_ADMIN_* vars are set
 docker compose up -d
 ```
 
@@ -48,8 +72,6 @@ Open `http://localhost:5000`.
 | `scripts/install_postgres.sh` | Installs PostgreSQL 18 and the pgvector system extension |
 | `scripts/setup_db.sh` | Creates the database user, database, grants, and enables the extension |
 | `backend/run.py` | Auto-triggers `setup_db.sh` on first start if DB is not ready |
-
----
 
 #### System Requirements
 
@@ -90,7 +112,7 @@ A row must appear. If it does not, the extension install failed — do not proce
 cp .env.example .env
 ```
 
-Default values work for local development without changes.
+**Crucial for Local Dev**: Ensure `REACT_APP_API_URL=http://localhost:5000` is set in your `.env`, and provide a `DB_PASSWORD` and `DEFAULT_ADMIN_PASSWORD`.
 
 ---
 
@@ -120,7 +142,7 @@ source venv/bin/activate
 pip install -r backend/requirements.txt
 ```
 
-**GPU (CUDA 12.8):**
+**GPU (CUDA 12.8 Requirement):**
 ```bash
 python -m venv venv
 source venv/bin/activate
@@ -129,6 +151,7 @@ pip install -r backend/requirements.txt --index-url https://download.pytorch.org
 
 > The `--index-url` flag resolves `torch`, `torchvision`, and `torchaudio` from the
 > cu128 wheel index. All other packages are fetched from PyPI as normal.
+
 ---
 
 #### ONNXRuntime Setup (CPU vs GPU)
@@ -137,7 +160,7 @@ pip install -r backend/requirements.txt --index-url https://download.pytorch.org
 > A mismatch (e.g. torch cu128 + ort built for cu11) causes `libcublasLt.so.12 not found`
 > and silent fallback to CPU with no error message.
 
-**This project targets CUDA 12.8.** Both torch (cu128) and onnxruntime-gpu (CUDA 12.x build
+**This project explicitly targets CUDA 12.8.** Both torch (cu128) and onnxruntime-gpu (CUDA 12.x build
 from PyPI) are aligned to CUDA 12. Install CUDA 12.8 from the
 [NVIDIA CUDA Archive](https://developer.nvidia.com/cuda-12-8-0-download-archive) before
 setting up the GPU environment.
@@ -176,6 +199,7 @@ both** in the same environment — uninstall one before switching.
 
 Also ensure `PREFER_GPU=true` is set in your `.env`.
 
+---
 
 #### 5. Install frontend dependencies
 
@@ -210,7 +234,7 @@ Opens at `http://localhost:3000`.
 | `could not connect to server` | PostgreSQL not running | `sudo systemctl start postgresql` |
 | `extension "vector" is not available` | pgvector not installed at system level | Re-run `sudo bash scripts/install_postgres.sh` |
 | `role "safion" does not exist` | setup_db.sh not run | `bash scripts/setup_db.sh` |
-| `password authentication failed` | Wrong password in `.env` | Check `DATABASE_URL` in `.env` |
+| `password authentication failed` | Wrong password in `.env` | Check `DB_PASSWORD` and `DB_USER` in `.env` |
 | `could not load library "vector.so"` | pgvector built for wrong PG version | Reinstall pgvector against PG 18 |
 
 ---
