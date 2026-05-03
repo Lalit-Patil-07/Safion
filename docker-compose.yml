@@ -1,7 +1,7 @@
 services:
 
   db:
-    image: pgvector/pgvector:pg16
+    image: pgvector/pgvector:pg18
     container_name: safion_db
     restart: unless-stopped
     environment:
@@ -30,7 +30,7 @@ services:
     ports:
       - "5000:5000"
     volumes:
-      - ./best.pt:/app/best.pt:ro
+      - safion_identity:/app/backend/identity_storage
       - safion_insightface:/root/.insightface
       - safion_data:/app/backend/violations_images
       - safion_temp:/app/backend/temp
@@ -48,3 +48,4 @@ volumes:
   safion_insightface:
   safion_data:
   safion_temp:
+  safion_identity:
