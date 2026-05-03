@@ -531,6 +531,14 @@ class InsightFacePipeline:
         normed_embs  = [_unit(e) for e in embeddings]
         best_quality = float(max(qualities))
 
+        emb_matrix = np.stack(normed_embs).astype(np.float32)
+        w          = np.array(qualities, dtype=np.float32)
+        w_sum      = w.sum()
+        mean_emb   = _unit(
+            (emb_matrix * (w / w_sum)[:, None]).sum(axis=0)
+            if w_sum > 0 else emb_matrix.mean(axis=0)
+        )
+
         cache      = self._snapshot()
         best_id    : Optional[str] = None
         best_label : str           = ""
@@ -538,12 +546,9 @@ class InsightFacePipeline:
         best_raw   : float         = 0.0
 
         for identity_id, data in cache.items():
-            raw = max(
-                _proto_max_similarity(
-                    data["prototypes"], emb,
-                    label=data["label"], identity_id=identity_id,
-                )
-                for emb in normed_embs
+            raw = _proto_max_similarity(
+                data["prototypes"], mean_emb,
+                label=data["label"], identity_id=identity_id,
             )
             score = raw + _temporal_bonus(data, self._recent_window, self._temporal_boost)
             logger.debug(
@@ -558,14 +563,6 @@ class InsightFacePipeline:
 
         matched = best_id and best_score >= self._threshold
 
-        emb_matrix = np.stack(normed_embs).astype(np.float32)
-        w          = np.array(qualities, dtype=np.float32)
-        w_sum      = w.sum()
-        mean_emb   = _unit(
-            (emb_matrix * (w / w_sum)[:, None]).sum(axis=0)
-            if w_sum > 0 else emb_matrix.mean(axis=0)
-        )
-
         logger.debug(
             "match_and_store_track: n_embeddings=%d  best='%s'  "
             "raw_similarity=%.4f  temporal_bonus=%.4f  total_score=%.4f  "
@@ -574,7 +571,7 @@ class InsightFacePipeline:
             best_raw, best_score - best_raw, best_score,
             self._threshold, matched, len(cache),
         )
-        _log_top_candidates(cache, normed_embs[int(np.argmax(qualities))], self._threshold)
+        _log_top_candidates(cache, mean_emb, self._threshold)
 
         if not matched:
             identity   = FaceIdentity.create_auto()
