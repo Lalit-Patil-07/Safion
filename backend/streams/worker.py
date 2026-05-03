@@ -278,6 +278,7 @@ class StreamWorker:
         self._violation_coalesce_window: float = cfg["VIOLATION_COALESCE_WINDOW_S"]
         # (identity_id, violation_type) → last buffered monotonic timestamp
         self._violation_coalesce_seen:   dict  = {}
+        self._violation_buffer = []
 
         # ── Stream restart and stall detection ───────────────────────────────────
         self._stall_timeout:   float = cfg["STREAM_STALL_TIMEOUT_S"]
@@ -524,18 +525,15 @@ class StreamWorker:
                     self._buffer_violation(violation_job)
 
         # Get tracks that will be removed
-        active_before = set(t.track_id for t in self.tracker.active_tracks())
+        active_before = set(t.track_id for t in self.tracker.active_tracks)
 
         self.tracker.mark_missing(active_bboxes)
 
         # Get tracks that remain after marking missing
-        active_after = set(t.track_id for t in self.tracker.active_tracks())
+        active_after = set(t.track_id for t in self.tracker.active_tracks)
 
         # Handle track termination: flush buffered violations for removed tracks
         removed_tracks = active_before - active_after
-
-        # Handle track termination: flush buffered violations for removed tracks
-        removed_tracks = tracks_before - tracks_after
         for track_id in removed_tracks:
             if track_id in self._pending_identity_violations:
                 # Assign identity_label = "Unknown Person" and flush buffered violations
