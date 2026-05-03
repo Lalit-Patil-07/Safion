@@ -10,8 +10,7 @@ import {
   BarChart2, Eye, Check, AlertTriangle, RefreshCw, Inbox,
   Star, TrendingUp, Filter, Zap, Link2, LogOut
 } from 'lucide-react';
-
-const API = 'http://10.7.2.29:5000';
+import API from './config';
 
 const VIOLATION_COLORS = {
   'NO-Hardhat':     '#EF4444',
