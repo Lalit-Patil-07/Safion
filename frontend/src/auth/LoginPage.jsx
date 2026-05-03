@@ -1,8 +1,7 @@
 import React, { useState } from 'react';
 import { Shield, Loader } from 'lucide-react';
 import { useAuth } from './AuthContext';
-
-const API = '';
+import API from '../config';
 
 export default function LoginPage() {
   const { login } = useAuth();

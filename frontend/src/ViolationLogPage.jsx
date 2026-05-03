@@ -1,7 +1,6 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { RefreshCw, Trash2, Loader } from 'lucide-react';
-
-const API = '';
+import API from './config';
 
 const fmt = (iso) => iso ? new Date(iso).toLocaleString() : '—';
 
