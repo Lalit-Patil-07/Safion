@@ -6,20 +6,24 @@ module.exports = {
   theme: {
     extend: {
       colors: {
-        primary: '#5a51a2',      // Frigate Purple
-        background: '#1c1e26',   // Frigate Dark Background
-        card: '#2d3748',         // Frigate Card Background
-        'card-secondary': '#1f2937', // Slightly darker card variant
-        border: '#4A5568',       // Borders and dividers
+        primary: '#F54F00',      // Signal Orange
+        background: '#09090E',   // Void
+        card: '#181826',         // Node Inactive / Card
+        'card-secondary': '#131322', // Ink 2
+        border: '#1C1C2E',       // Boundary
         text: {
-          DEFAULT: '#E2E8F0',    // Default text color
-          secondary: '#A0AEC0',  // Lighter, secondary text
+          DEFAULT: '#EDEDF4',    // Frost
+          secondary: '#7878A0',  // Text Mid
+          tertiary: '#363650',   // Text Lo
         },
         accent: {
           green: '#48BB78',
-          yellow: '#f09239',   // Frigate Orange
-          red: '#bd3a06',      // Frigate Red
+          yellow: '#F54F00',   // Frigate Orange -> mapped to Signal Orange just in case
+          red: '#EF4444',
         },
+      },
+      fontFamily: {
+        sans: ['Space Grotesk', 'sans-serif'],
       },
     },
   },

@@ -189,9 +189,9 @@ const DashboardPage = ({ setView }) => {
   }, []);
 
   return (
-    <div className="p-6 max-w-5xl">
+    <div className="p-6 w-full max-w-7xl mx-auto">
       <h2 className="text-2xl font-bold text-text mb-6">Dashboard</h2>
-      <div className="grid grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
         <StatCard label="Total identities"  value={stats?.total_identities}  icon={Users}         color="#3b82f6" />
         <StatCard label="Confirmed"         value={stats?.confirmed_count}   icon={CheckCircle}    color="#22c55e" />
         <StatCard label="Needs review"      value={stats?.unconfirmed_count} icon={Inbox}          color="#f59e0b" />
