@@ -1,8 +1,33 @@
 import React, { useState } from 'react';
 import { Shield, Loader } from 'lucide-react';
 import { useAuth } from './AuthContext';
-import logo from '../logo.svg';
 import API from '../config';
+
+
+const SafionLogo = ({ className, width, height }) => (
+  <svg width={width} height={height} viewBox="0 0 123 152" className={className}>
+    <rect x="8"  y="8"   width="20" height="20" rx="8" fill="#181826"/>
+    <rect x="37" y="8"   width="20" height="20" rx="8" fill="#F54F00"/>
+    <rect x="66" y="8"   width="20" height="20" rx="8" fill="#F54F00"/>
+    <rect x="95" y="8"   width="20" height="20" rx="8" fill="#F54F00"/>
+    <rect x="8"  y="37"  width="20" height="20" rx="8" fill="#F54F00"/>
+    <rect x="37" y="37"  width="20" height="20" rx="8" fill="#181826"/>
+    <rect x="66" y="37"  width="20" height="20" rx="8" fill="#181826"/>
+    <rect x="95" y="37"  width="20" height="20" rx="8" fill="#181826"/>
+    <rect x="8"  y="66"  width="20" height="20" rx="8" fill="#181826"/>
+    <rect x="37" y="66"  width="20" height="20" rx="8" fill="#F54F00"/>
+    <rect x="66" y="66"  width="20" height="20" rx="8" fill="#F54F00"/>
+    <rect x="95" y="66"  width="20" height="20" rx="8" fill="#181826"/>
+    <rect x="8"  y="95"  width="20" height="20" rx="8" fill="#181826"/>
+    <rect x="37" y="95"  width="20" height="20" rx="8" fill="#181826"/>
+    <rect x="66" y="95"  width="20" height="20" rx="8" fill="#181826"/>
+    <rect x="95" y="95"  width="20" height="20" rx="8" fill="#F54F00"/>
+    <rect x="8"  y="124" width="20" height="20" rx="8" fill="#F54F00"/>
+    <rect x="37" y="124" width="20" height="20" rx="8" fill="#F54F00"/>
+    <rect x="66" y="124" width="20" height="20" rx="8" fill="#F54F00"/>
+    <rect x="95" y="124" width="20" height="20" rx="8" fill="#181826"/>
+  </svg>
+);
 
 export default function LoginPage() {
   const { login } = useAuth();
@@ -35,7 +60,7 @@ export default function LoginPage() {
     <div className="min-h-screen bg-background flex items-center justify-center">
       <div className="bg-card border border-border rounded-xl p-8 w-full max-w-sm shadow-2xl">
         <div className="flex flex-col items-center mb-8">
-          <img src={logo} alt="Safion Logo" className="w-[64px] h-[82px] mb-4" />
+          <SafionLogo width="64" height="82" className="mb-4" />
           <span className="font-sans font-medium uppercase text-text" style={{ fontSize: '18px', letterSpacing: '0.42em' }}>SAFION</span>
           <p className="text-xs text-text-secondary mt-2">Safety monitoring system</p>
         </div>
