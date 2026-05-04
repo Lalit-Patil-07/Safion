@@ -1,0 +1,744 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Safion — Brand Guidelines</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&display=swap"/>
+<style>
+/* ─── RESET & TOKENS ─────────────────────────────────── */
+*{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --orange:#F54F00;
+  --orange-dim:rgba(245,79,0,.12);
+  --orange-mid:rgba(245,79,0,.4);
+  --ink:#09090E;
+  --ink-1:#0D0D18;
+  --ink-2:#131322;
+  --ink-3:#1A1A2C;
+  --ink-4:#222238;
+  --node-off:#181826;
+  --rule:#1C1C2E;
+  --txt-hi:#EDEDF4;
+  --txt-md:#7878A0;
+  --txt-lo:#363650;
+  --font:'Space Grotesk',sans-serif;
+}
+html{scroll-behavior:smooth}
+body{background:var(--ink);color:var(--txt-hi);font-family:var(--font);-webkit-font-smoothing:antialiased;overflow-x:hidden}
+
+/* ─── SIDEBAR NAV ────────────────────────────────────── */
+.nav{
+  position:fixed;left:0;top:0;width:200px;height:100vh;
+  background:var(--ink-1);border-right:1px solid var(--rule);
+  display:flex;flex-direction:column;padding:32px 0;z-index:100;
+}
+.nav-logo{padding:0 24px 28px;border-bottom:1px solid var(--rule)}
+.nav-logo svg{display:block}
+.nav-links{padding:24px 0;flex:1;overflow-y:auto}
+.nav-links a{
+  display:block;padding:9px 24px;font-size:10.5px;letter-spacing:.18em;
+  text-transform:uppercase;color:var(--txt-lo);text-decoration:none;
+  transition:color .2s;position:relative;
+}
+.nav-links a:hover{color:var(--txt-md)}
+.nav-links a.active{color:var(--orange)}
+.nav-links a.active::before{
+  content:'';position:absolute;left:0;top:50%;transform:translateY(-50%);
+  width:2px;height:16px;background:var(--orange);border-radius:1px;
+}
+.nav-section-label{
+  padding:16px 24px 6px;font-size:8px;letter-spacing:.26em;
+  text-transform:uppercase;color:var(--txt-lo);
+}
+.nav-footer{padding:20px 24px;border-top:1px solid var(--rule)}
+.nav-footer-txt{font-size:9px;letter-spacing:.1em;color:var(--txt-lo)}
+
+/* ─── MAIN CONTENT ───────────────────────────────────── */
+.main{margin-left:200px;min-height:100vh}
+
+/* ─── SECTION SCAFFOLD ───────────────────────────────── */
+.section{
+  padding:80px 64px;border-bottom:1px solid var(--rule);
+  max-width:1100px;
+}
+.section:last-child{border-bottom:none}
+.section-kicker{
+  font-size:8.5px;letter-spacing:.28em;text-transform:uppercase;
+  color:var(--txt-lo);margin-bottom:14px;
+}
+.section-title{
+  font-size:28px;font-weight:600;letter-spacing:-.03em;
+  color:var(--txt-hi);margin-bottom:32px;line-height:1.15;
+}
+.section-title span{color:var(--orange)}
+.rule{height:1px;background:var(--rule);margin:40px 0}
+
+/* ─── COVER / MANIFESTO ──────────────────────────────── */
+#cover{
+  min-height:100vh;padding:0;display:flex;flex-direction:column;
+  justify-content:center;position:relative;overflow:hidden;
+  border-bottom:1px solid var(--rule);
+}
+.cover-bg{
+  position:absolute;inset:0;
+  background:radial-gradient(ellipse 60% 55% at 70% 50%,rgba(245,79,0,.06) 0%,transparent 70%);
+  pointer-events:none;
+}
+.cover-grid{
+  position:absolute;inset:0;
+  background-image:
+    linear-gradient(var(--rule) 1px,transparent 1px),
+    linear-gradient(90deg,var(--rule) 1px,transparent 1px);
+  background-size:44px 44px;
+  mask-image:radial-gradient(ellipse 80% 80% at 70% 50%,black 0%,transparent 80%);
+  opacity:.5;pointer-events:none;
+}
+.cover-inner{padding:80px 64px;position:relative;z-index:1}
+.cover-badge{
+  display:inline-block;
+  border:1px solid var(--orange);
+  color:var(--orange);
+  font-size:8.5px;letter-spacing:.28em;text-transform:uppercase;
+  padding:6px 14px;border-radius:2px;margin-bottom:36px;
+}
+.cover-eyebrow{
+  font-size:13px;font-weight:300;letter-spacing:.08em;
+  color:var(--txt-md);margin-bottom:16px;
+}
+.manifesto{
+  font-size:42px;font-weight:700;letter-spacing:-.04em;
+  line-height:1.12;color:var(--txt-hi);max-width:680px;margin-bottom:32px;
+}
+.manifesto em{color:var(--orange);font-style:normal}
+.manifesto-sub{
+  font-size:15px;font-weight:400;line-height:1.75;
+  color:var(--txt-md);max-width:520px;margin-bottom:48px;
+}
+.cover-meta-row{display:flex;gap:48px}
+.cover-meta dt{font-size:8px;letter-spacing:.22em;text-transform:uppercase;color:var(--txt-lo);margin-bottom:5px}
+.cover-meta dd{font-size:13px;font-weight:500;color:var(--txt-md)}
+
+/* ─── MARK SECTION ───────────────────────────────────── */
+.mark-stage{
+  background:var(--ink-1);border:1px solid var(--rule);border-radius:16px;
+  display:flex;align-items:center;justify-content:center;
+  padding:60px;margin-bottom:32px;
+}
+.anatomy-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
+.anatomy-card{
+  background:var(--ink-2);border:1px solid var(--rule);border-radius:10px;
+  padding:20px;
+}
+.anatomy-label{font-size:8px;letter-spacing:.2em;text-transform:uppercase;color:var(--orange);margin-bottom:8px}
+.anatomy-val{font-size:22px;font-weight:600;color:var(--txt-hi);margin-bottom:4px}
+.anatomy-desc{font-size:10.5px;line-height:1.6;color:var(--txt-lo)}
+
+/* ─── LOCKUP SECTION ─────────────────────────────────── */
+.lockup-stage{
+  background:var(--ink-1);border:1px solid var(--rule);border-radius:16px;
+  padding:52px 60px;display:flex;align-items:center;justify-content:flex-start;
+  gap:20px;margin-bottom:16px;
+}
+.lockup-stage.centered{justify-content:center;flex-direction:column;gap:16px}
+.lockup-stage.light-bg{background:#F0F0F5;border-color:#D4D4DE}
+.lockup-label{font-size:9px;letter-spacing:.18em;text-transform:uppercase;color:var(--txt-lo);margin-bottom:10px}
+.lockup-desc{font-size:11px;line-height:1.65;color:var(--txt-lo);max-width:520px}
+.lockup-pair{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:32px}
+
+.wm{
+  font-family:var(--font);font-weight:500;font-size:36px;
+  letter-spacing:.3em;color:var(--txt-hi);text-transform:uppercase;line-height:1;
+}
+.wm-dark{color:#1A1A2C}
+
+/* ─── COLOR PALETTE ──────────────────────────────────── */
+.palette-row{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:32px}
+.swatch-card{border-radius:12px;overflow:hidden;border:1px solid var(--rule)}
+.swatch-body{height:88px}
+.swatch-info{padding:14px 14px 16px;background:var(--ink-2)}
+.swatch-name{font-size:11px;font-weight:600;color:var(--txt-hi);margin-bottom:3px}
+.swatch-hex{font-size:9px;letter-spacing:.12em;color:var(--txt-lo);font-family:monospace}
+.swatch-role{font-size:9px;color:var(--txt-lo);margin-top:5px}
+.usage-row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
+.usage-card{
+  background:var(--ink-2);border:1px solid var(--rule);border-radius:10px;
+  padding:18px;display:flex;gap:14px;align-items:flex-start;
+}
+.usage-pip{width:8px;height:8px;border-radius:50%;flex-shrink:0;margin-top:4px}
+.usage-title{font-size:10.5px;font-weight:600;color:var(--txt-hi);margin-bottom:4px}
+.usage-body{font-size:10px;line-height:1.6;color:var(--txt-lo)}
+
+/* ─── TYPOGRAPHY ─────────────────────────────────────── */
+.type-specimen{
+  background:var(--ink-2);border:1px solid var(--rule);border-radius:12px;
+  padding:32px;margin-bottom:12px;
+}
+.type-label{font-size:8px;letter-spacing:.22em;text-transform:uppercase;color:var(--txt-lo);margin-bottom:16px}
+.type-weights{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:32px}
+.type-weight-card{
+  background:var(--ink-2);border:1px solid var(--rule);border-radius:10px;
+  padding:18px 16px;
+}
+.type-weight-num{font-size:8px;letter-spacing:.14em;color:var(--txt-lo);margin-bottom:10px}
+.type-use-card{
+  background:var(--ink-2);border:1px solid var(--rule);border-radius:10px;
+  padding:20px;
+}
+.type-use-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
+
+/* ─── BRAND VOICE ────────────────────────────────────── */
+.voice-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:32px}
+.voice-card{
+  background:var(--ink-2);border:1px solid var(--rule);border-radius:12px;
+  padding:24px;
+}
+.voice-pill{
+  display:inline-block;font-size:8px;letter-spacing:.18em;text-transform:uppercase;
+  padding:4px 10px;border-radius:100px;margin-bottom:14px;
+}
+.voice-pill.pos{background:rgba(245,79,0,.12);color:var(--orange)}
+.voice-pill.neg{background:rgba(80,80,120,.15);color:#5050A0}
+.voice-head{font-size:14px;font-weight:600;color:var(--txt-hi);margin-bottom:10px}
+.voice-body{font-size:11px;line-height:1.7;color:var(--txt-lo)}
+.voice-examples{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.example-card{
+  border-radius:10px;padding:20px;
+}
+.example-card.do{background:rgba(245,79,0,.06);border:1px solid rgba(245,79,0,.2)}
+.example-card.dont{background:rgba(50,50,80,.15);border:1px solid var(--rule)}
+.example-tag{font-size:8px;letter-spacing:.2em;text-transform:uppercase;margin-bottom:10px}
+.example-tag.do{color:var(--orange)}
+.example-tag.dont{color:#5050A0}
+.example-copy{font-size:11.5px;line-height:1.7;color:var(--txt-md);font-style:italic}
+
+/* ─── DO/DON'T ───────────────────────────────────────── */
+.dontdo-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.dd-card{
+  border-radius:12px;padding:28px;display:flex;flex-direction:column;align-items:center;gap:16px;
+  border:1px solid;
+}
+.dd-card.do{background:rgba(245,79,0,.04);border-color:rgba(245,79,0,.15)}
+.dd-card.dont{background:rgba(60,60,90,.08);border-color:var(--rule)}
+.dd-tag{font-size:8px;letter-spacing:.22em;text-transform:uppercase}
+.dd-tag.do{color:var(--orange)}
+.dd-tag.dont{color:#5050A0}
+.dd-note{font-size:10px;line-height:1.6;color:var(--txt-lo);text-align:center}
+
+/* ─── FOOTER ─────────────────────────────────────────── */
+.foot{
+  padding:48px 64px;border-top:1px solid var(--rule);
+  display:flex;justify-content:space-between;align-items:center;
+}
+.foot-left{font-size:10px;letter-spacing:.1em;color:var(--txt-lo)}
+.foot-right{font-size:10px;color:var(--txt-lo)}
+.foot-orange{color:var(--orange)}
+
+/* ─── SCROLLSPY ──────────────────────────────────────── */
+</style>
+</head>
+<body>
+
+<!-- ════ SIDEBAR ════ -->
+<nav class="nav">
+  <div class="nav-logo">
+    <svg width="44" height="56" viewBox="0 0 123 152">
+      <rect x="8"  y="8"   width="20" height="20" rx="8" fill="#181826"/>
+      <rect x="37" y="8"   width="20" height="20" rx="8" fill="#F54F00"/>
+      <rect x="66" y="8"   width="20" height="20" rx="8" fill="#F54F00"/>
+      <rect x="95" y="8"   width="20" height="20" rx="8" fill="#F54F00"/>
+      <rect x="8"  y="37"  width="20" height="20" rx="8" fill="#F54F00"/>
+      <rect x="37" y="37"  width="20" height="20" rx="8" fill="#181826"/>
+      <rect x="66" y="37"  width="20" height="20" rx="8" fill="#181826"/>
+      <rect x="95" y="37"  width="20" height="20" rx="8" fill="#181826"/>
+      <rect x="8"  y="66"  width="20" height="20" rx="8" fill="#181826"/>
+      <rect x="37" y="66"  width="20" height="20" rx="8" fill="#F54F00"/>
+      <rect x="66" y="66"  width="20" height="20" rx="8" fill="#F54F00"/>
+      <rect x="95" y="66"  width="20" height="20" rx="8" fill="#181826"/>
+      <rect x="8"  y="95"  width="20" height="20" rx="8" fill="#181826"/>
+      <rect x="37" y="95"  width="20" height="20" rx="8" fill="#181826"/>
+      <rect x="66" y="95"  width="20" height="20" rx="8" fill="#181826"/>
+      <rect x="95" y="95"  width="20" height="20" rx="8" fill="#F54F00"/>
+      <rect x="8"  y="124" width="20" height="20" rx="8" fill="#F54F00"/>
+      <rect x="37" y="124" width="20" height="20" rx="8" fill="#F54F00"/>
+      <rect x="66" y="124" width="20" height="20" rx="8" fill="#F54F00"/>
+      <rect x="95" y="124" width="20" height="20" rx="8" fill="#181826"/>
+    </svg>
+  </div>
+  <div class="nav-links">
+    <div class="nav-section-label">Brand Book</div>
+    <a href="#cover" class="active">Introduction</a>
+    <a href="#mark">The Mark</a>
+    <a href="#lockups">Logo Lockups</a>
+    <a href="#color">Color Palette</a>
+    <a href="#type">Typography</a>
+    <a href="#voice">Brand Voice</a>
+    <a href="#dontdo">Do &amp; Don't</a>
+  </div>
+  <div class="nav-footer">
+    <div class="nav-footer-txt">Safion Brand Guidelines<br/>Version 1.0 · 2025</div>
+  </div>
+</nav>
+
+<!-- ════ MAIN ════ -->
+<main class="main">
+
+<!-- ── COVER / MANIFESTO ── -->
+<section id="cover" class="section" style="padding:0;max-width:none">
+  <div class="cover-bg"></div>
+  <div class="cover-grid"></div>
+  <div class="cover-inner">
+    <div class="cover-badge">Brand Identity System · v1.0</div>
+    <div class="cover-eyebrow">Safion · AI-Powered Safety Monitoring</div>
+    <h1 class="manifesto">Every frame.<br/><em>Every threat.</em><br/>Zero compromise.</h1>
+    <p class="manifesto-sub">Safion exists at the intersection of machine vision and human accountability. We don't guess. We don't approximate. We detect, classify, and alert — with the precision of a system that knows the difference between a shadow and a threat.</p>
+    <dl class="cover-meta">
+      <div>
+        <dt>Brand Personality</dt>
+        <dd>Precise · Technical · Vigilant</dd>
+      </div>
+      <div>
+        <dt>Primary Typeface</dt>
+        <dd>Space Grotesk 500</dd>
+      </div>
+      <div>
+        <dt>Signal Color</dt>
+        <dd>#F54F00 — Alert Orange</dd>
+      </div>
+    </dl>
+  </div>
+</section>
+
+<!-- ── THE MARK ── -->
+<section id="mark" class="section">
+  <div class="section-kicker">01 — Identity</div>
+  <h2 class="section-title">The <span>Mark</span></h2>
+
+  <div class="mark-stage">
+    <svg width="168" height="210" viewBox="0 0 123 152">
+      <rect x="8"  y="8"   width="20" height="20" rx="8" fill="#181826"/>
+      <rect x="37" y="8"   width="20" height="20" rx="8" fill="#F54F00"/>
+      <rect x="66" y="8"   width="20" height="20" rx="8" fill="#F54F00"/>
+      <rect x="95" y="8"   width="20" height="20" rx="8" fill="#F54F00"/>
+      <rect x="8"  y="37"  width="20" height="20" rx="8" fill="#F54F00"/>
+      <rect x="37" y="37"  width="20" height="20" rx="8" fill="#181826"/>
+      <rect x="66" y="37"  width="20" height="20" rx="8" fill="#181826"/>
+      <rect x="95" y="37"  width="20" height="20" rx="8" fill="#181826"/>
+      <rect x="8"  y="66"  width="20" height="20" rx="8" fill="#181826"/>
+      <rect x="37" y="66"  width="20" height="20" rx="8" fill="#F54F00"/>
+      <rect x="66" y="66"  width="20" height="20" rx="8" fill="#F54F00"/>
+      <rect x="95" y="66"  width="20" height="20" rx="8" fill="#181826"/>
+      <rect x="8"  y="95"  width="20" height="20" rx="8" fill="#181826"/>
+      <rect x="37" y="95"  width="20" height="20" rx="8" fill="#181826"/>
+      <rect x="66" y="95"  width="20" height="20" rx="8" fill="#181826"/>
+      <rect x="95" y="95"  width="20" height="20" rx="8" fill="#F54F00"/>
+      <rect x="8"  y="124" width="20" height="20" rx="8" fill="#F54F00"/>
+      <rect x="37" y="124" width="20" height="20" rx="8" fill="#F54F00"/>
+      <rect x="66" y="124" width="20" height="20" rx="8" fill="#F54F00"/>
+      <rect x="95" y="124" width="20" height="20" rx="8" fill="#181826"/>
+    </svg>
+  </div>
+
+  <div class="anatomy-grid">
+    <div class="anatomy-card">
+      <div class="anatomy-label">Grid Structure</div>
+      <div class="anatomy-val">4 × 5</div>
+      <div class="anatomy-desc">A strict 20-node orthogonal grid. No diagonals, no curves. The letter S is resolved entirely within a rectangular matrix — encoding precision and constraint.</div>
+    </div>
+    <div class="anatomy-card">
+      <div class="anatomy-label">Node Geometry</div>
+      <div class="anatomy-val">Squircle</div>
+      <div class="anatomy-desc">Each cell is 20 × 20 px with a border-radius of 8 px (40% of cell width). The squircle sits between a square's authority and a circle's approachability.</div>
+    </div>
+    <div class="anatomy-card">
+      <div class="anatomy-label">Active / Total</div>
+      <div class="anatomy-val">10 / 20</div>
+      <div class="anatomy-desc">10 nodes active (Alert Orange). 10 inactive (Deep Neutral). The diagonal drift — top bar right-biased, bottom bar left-biased — encodes the S-curve within a pure orthogonal system.</div>
+    </div>
+    <div class="anatomy-card">
+      <div class="anatomy-label">Spacing</div>
+      <div class="anatomy-val">9 px gap</div>
+      <div class="anatomy-desc">Uniform 9 px gutter between all cells on both axes. The gap-to-cell ratio of ~0.45 is intentional — enough air to read individual nodes, not so much that the grid dissolves.</div>
+    </div>
+    <div class="anatomy-card">
+      <div class="anatomy-label">Conceptual Metaphor</div>
+      <div class="anatomy-val">YOLO Grid</div>
+      <div class="anatomy-desc">The matrix directly references YOLO (You Only Look Once) object detection grids — the same spatial framework Safion uses to partition video frames for real-time analysis.</div>
+    </div>
+    <div class="anatomy-card">
+      <div class="anatomy-label">Clear Space</div>
+      <div class="anatomy-val">1 cell</div>
+      <div class="anatomy-desc">Minimum clear space on all sides equals one cell unit (20 px at native scale). Never crowd the mark. The surrounding negative space is part of the identity.</div>
+    </div>
+  </div>
+</section>
+
+<!-- ── LOGO LOCKUPS ── -->
+<section id="lockups" class="section">
+  <div class="section-kicker">02 — Lockups</div>
+  <h2 class="section-title">Logo <span>Lockups</span></h2>
+
+  <!-- Primary Horizontal – Dark -->
+  <div class="lockup-label">Primary Lockup — Dark Background</div>
+  <div class="lockup-stage" style="margin-bottom:10px">
+    <svg width="52" height="66" viewBox="0 0 123 152">
+      <rect x="8"  y="8"   width="20" height="20" rx="8" fill="#181826"/>
+      <rect x="37" y="8"   width="20" height="20" rx="8" fill="#F54F00"/>
+      <rect x="66" y="8"   width="20" height="20" rx="8" fill="#F54F00"/>
+      <rect x="95" y="8"   width="20" height="20" rx="8" fill="#F54F00"/>
+      <rect x="8"  y="37"  width="20" height="20" rx="8" fill="#F54F00"/>
+      <rect x="37" y="37"  width="20" height="20" rx="8" fill="#181826"/>
+      <rect x="66" y="37"  width="20" height="20" rx="8" fill="#181826"/>
+      <rect x="95" y="37"  width="20" height="20" rx="8" fill="#181826"/>
+      <rect x="8"  y="66"  width="20" height="20" rx="8" fill="#181826"/>
+      <rect x="37" y="66"  width="20" height="20" rx="8" fill="#F54F00"/>
+      <rect x="66" y="66"  width="20" height="20" rx="8" fill="#F54F00"/>
+      <rect x="95" y="66"  width="20" height="20" rx="8" fill="#181826"/>
+      <rect x="8"  y="95"  width="20" height="20" rx="8" fill="#181826"/>
+      <rect x="37" y="95"  width="20" height="20" rx="8" fill="#181826"/>
+      <rect x="66" y="95"  width="20" height="20" rx="8" fill="#181826"/>
+      <rect x="95" y="95"  width="20" height="20" rx="8" fill="#F54F00"/>
+      <rect x="8"  y="124" width="20" height="20" rx="8" fill="#F54F00"/>
+      <rect x="37" y="124" width="20" height="20" rx="8" fill="#F54F00"/>
+      <rect x="66" y="124" width="20" height="20" rx="8" fill="#F54F00"/>
+      <rect x="95" y="124" width="20" height="20" rx="8" fill="#181826"/>
+    </svg>
+    <span class="wm">SAFION</span>
+  </div>
+  <p class="lockup-desc" style="margin-bottom:28px">Space Grotesk 500 · All-caps · Letter-spacing 0.30em. Mark scaled to 52 × 66 px. Gap between mark and wordmark: 20 px. This is the primary lockup for all dark-background applications.</p>
+
+  <!-- Primary Horizontal – Light -->
+  <div class="lockup-label">Primary Lockup — Light Background</div>
+  <div class="lockup-stage light-bg" style="margin-bottom:10px">
+    <svg width="52" height="66" viewBox="0 0 123 152">
+      <rect x="8"  y="8"   width="20" height="20" rx="8" fill="#D8D8E8"/>
+      <rect x="37" y="8"   width="20" height="20" rx="8" fill="#F54F00"/>
+      <rect x="66" y="8"   width="20" height="20" rx="8" fill="#F54F00"/>
+      <rect x="95" y="8"   width="20" height="20" rx="8" fill="#F54F00"/>
+      <rect x="8"  y="37"  width="20" height="20" rx="8" fill="#F54F00"/>
+      <rect x="37" y="37"  width="20" height="20" rx="8" fill="#D8D8E8"/>
+      <rect x="66" y="37"  width="20" height="20" rx="8" fill="#D8D8E8"/>
+      <rect x="95" y="37"  width="20" height="20" rx="8" fill="#D8D8E8"/>
+      <rect x="8"  y="66"  width="20" height="20" rx="8" fill="#D8D8E8"/>
+      <rect x="37" y="66"  width="20" height="20" rx="8" fill="#F54F00"/>
+      <rect x="66" y="66"  width="20" height="20" rx="8" fill="#F54F00"/>
+      <rect x="95" y="66"  width="20" height="20" rx="8" fill="#D8D8E8"/>
+      <rect x="8"  y="95"  width="20" height="20" rx="8" fill="#D8D8E8"/>
+      <rect x="37" y="95"  width="20" height="20" rx="8" fill="#D8D8E8"/>
+      <rect x="66" y="95"  width="20" height="20" rx="8" fill="#D8D8E8"/>
+      <rect x="95" y="95"  width="20" height="20" rx="8" fill="#F54F00"/>
+      <rect x="8"  y="124" width="20" height="20" rx="8" fill="#F54F00"/>
+      <rect x="37" y="124" width="20" height="20" rx="8" fill="#F54F00"/>
+      <rect x="66" y="124" width="20" height="20" rx="8" fill="#F54F00"/>
+      <rect x="95" y="124" width="20" height="20" rx="8" fill="#D8D8E8"/>
+    </svg>
+    <span class="wm wm-dark">SAFION</span>
+  </div>
+  <p class="lockup-desc" style="margin-bottom:28px">On light backgrounds, inactive nodes shift to <code style="font-size:10px;color:var(--txt-md)">#D8D8E8</code> and the wordmark to <code style="font-size:10px;color:var(--txt-md)">#1A1A2C</code>. Signal orange is unchanged — it must remain constant across all backgrounds.</p>
+
+  <!-- Stacked Lockup -->
+  <div class="lockup-label">Stacked Lockup — Square / App Icon Context</div>
+  <div class="lockup-stage centered" style="margin-bottom:10px">
+    <svg width="64" height="82" viewBox="0 0 123 152">
+      <rect x="8"  y="8"   width="20" height="20" rx="8" fill="#181826"/>
+      <rect x="37" y="8"   width="20" height="20" rx="8" fill="#F54F00"/>
+      <rect x="66" y="8"   width="20" height="20" rx="8" fill="#F54F00"/>
+      <rect x="95" y="8"   width="20" height="20" rx="8" fill="#F54F00"/>
+      <rect x="8"  y="37"  width="20" height="20" rx="8" fill="#F54F00"/>
+      <rect x="37" y="37"  width="20" height="20" rx="8" fill="#181826"/>
+      <rect x="66" y="37"  width="20" height="20" rx="8" fill="#181826"/>
+      <rect x="95" y="37"  width="20" height="20" rx="8" fill="#181826"/>
+      <rect x="8"  y="66"  width="20" height="20" rx="8" fill="#181826"/>
+      <rect x="37" y="66"  width="20" height="20" rx="8" fill="#F54F00"/>
+      <rect x="66" y="66"  width="20" height="20" rx="8" fill="#F54F00"/>
+      <rect x="95" y="66"  width="20" height="20" rx="8" fill="#181826"/>
+      <rect x="8"  y="95"  width="20" height="20" rx="8" fill="#181826"/>
+      <rect x="37" y="95"  width="20" height="20" rx="8" fill="#181826"/>
+      <rect x="66" y="95"  width="20" height="20" rx="8" fill="#181826"/>
+      <rect x="95" y="95"  width="20" height="20" rx="8" fill="#F54F00"/>
+      <rect x="8"  y="124" width="20" height="20" rx="8" fill="#F54F00"/>
+      <rect x="37" y="124" width="20" height="20" rx="8" fill="#F54F00"/>
+      <rect x="66" y="124" width="20" height="20" rx="8" fill="#F54F00"/>
+      <rect x="95" y="124" width="20" height="20" rx="8" fill="#181826"/>
+    </svg>
+    <span class="wm" style="font-size:18px;letter-spacing:.42em">SAFION</span>
+  </div>
+  <p class="lockup-desc">Mark centered above wordmark. Wordmark reduced to 18 px with increased letter-spacing (0.42em) to match the visual width of the mark. Used for social profiles, app store icons, and square-format contexts.</p>
+</section>
+
+<!-- ── COLOR PALETTE ── -->
+<section id="color" class="section">
+  <div class="section-kicker">03 — Color</div>
+  <h2 class="section-title">Color <span>Palette</span></h2>
+
+  <div class="palette-row">
+    <div class="swatch-card">
+      <div class="swatch-body" style="background:#F54F00"></div>
+      <div class="swatch-info">
+        <div class="swatch-name">Signal Orange</div>
+        <div class="swatch-hex">#F54F00</div>
+        <div class="swatch-role">Primary · Alert · Active</div>
+      </div>
+    </div>
+    <div class="swatch-card">
+      <div class="swatch-body" style="background:#09090E"></div>
+      <div class="swatch-info">
+        <div class="swatch-name">Void</div>
+        <div class="swatch-hex">#09090E</div>
+        <div class="swatch-role">Page Background</div>
+      </div>
+    </div>
+    <div class="swatch-card">
+      <div class="swatch-body" style="background:#181826"></div>
+      <div class="swatch-info">
+        <div class="swatch-name">Node Inactive</div>
+        <div class="swatch-hex">#181826</div>
+        <div class="swatch-role">Mark · Inactive Grid</div>
+      </div>
+    </div>
+    <div class="swatch-card">
+      <div class="swatch-body" style="background:#1C1C2E"></div>
+      <div class="swatch-info">
+        <div class="swatch-name">Boundary</div>
+        <div class="swatch-hex">#1C1C2E</div>
+        <div class="swatch-role">Borders · Dividers</div>
+      </div>
+    </div>
+    <div class="swatch-card">
+      <div class="swatch-body" style="background:#EDEDF4"></div>
+      <div class="swatch-info">
+        <div class="swatch-name">Frost</div>
+        <div class="swatch-hex">#EDEDF4</div>
+        <div class="swatch-role">Primary Text · Wordmark</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="usage-row">
+    <div class="usage-card">
+      <div class="usage-pip" style="background:#F54F00"></div>
+      <div>
+        <div class="usage-title">Signal Orange — One job</div>
+        <div class="usage-body">Reserved exclusively for active detection nodes, alert states, CTAs, and the brand mark. Never use for decorative purposes. Its rarity is its power — when orange appears, something means something.</div>
+      </div>
+    </div>
+    <div class="usage-card">
+      <div class="usage-pip" style="background:#181826"></div>
+      <div>
+        <div class="usage-title">Void + Neutrals — The foundation</div>
+        <div class="usage-body">Three dark neutrals establish depth hierarchy. Void (#09090E) for canvas. Node Inactive (#181826) for the mark. Boundary (#1C1C2E) for structural rules. Never swap these — their subtle differences carry spatial information.</div>
+      </div>
+    </div>
+    <div class="usage-card">
+      <div class="usage-pip" style="background:#EDEDF4"></div>
+      <div>
+        <div class="usage-title">Frost — Not quite white</div>
+        <div class="usage-body">Pure white (#FFFFFF) is avoided. Frost (#EDEDF4) has a faint blue-violet undertone that harmonizes with the dark neutrals and prevents the sterile contrast of true white on near-black.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── TYPOGRAPHY ── -->
+<section id="type" class="section">
+  <div class="section-kicker">04 — Typography</div>
+  <h2 class="section-title">Type <span>System</span></h2>
+
+  <div class="type-specimen" style="margin-bottom:12px">
+    <div class="type-label">Display — Space Grotesk 700 · −0.04em tracking</div>
+    <div style="font-family:var(--font);font-weight:700;font-size:52px;letter-spacing:-.04em;color:var(--txt-hi);line-height:1.05">AI Safety,<br/>Pixel-Perfect.</div>
+  </div>
+  <div class="type-specimen" style="margin-bottom:12px">
+    <div class="type-label">Subheading — Space Grotesk 500 · −0.02em tracking</div>
+    <div style="font-family:var(--font);font-weight:500;font-size:22px;letter-spacing:-.02em;color:var(--txt-hi)">Real-time video analysis that flags violations before they become incidents.</div>
+  </div>
+  <div class="type-specimen" style="margin-bottom:12px">
+    <div class="type-label">Body — Space Grotesk 400 · 0em tracking · 1.75 leading</div>
+    <div style="font-family:var(--font);font-weight:400;font-size:14px;color:var(--txt-md);line-height:1.75;max-width:520px">Safion processes each frame through a YOLO detection pipeline, cross-referencing spatial coordinates against a configurable ruleset. Violations are logged, timestamped, and escalated according to severity tier.</div>
+  </div>
+  <div class="type-specimen" style="margin-bottom:28px">
+    <div class="type-label">Label / UI — Space Grotesk 500 · +0.22em tracking · uppercase</div>
+    <div style="font-family:var(--font);font-weight:500;font-size:10px;letter-spacing:.22em;text-transform:uppercase;color:var(--orange)">Alert · Detection Active · Stream 04</div>
+  </div>
+
+  <div class="type-weights">
+    <div class="type-weight-card">
+      <div class="type-weight-num">300</div>
+      <div style="font-family:var(--font);font-weight:300;font-size:28px;color:var(--txt-hi)">Ag</div>
+      <div style="font-size:10px;color:var(--txt-lo);margin-top:8px">Light — Hero subtext, captions</div>
+    </div>
+    <div class="type-weight-card">
+      <div class="type-weight-num">400</div>
+      <div style="font-family:var(--font);font-weight:400;font-size:28px;color:var(--txt-hi)">Ag</div>
+      <div style="font-size:10px;color:var(--txt-lo);margin-top:8px">Regular — Body copy, UI text</div>
+    </div>
+    <div class="type-weight-card" style="border-color:rgba(245,79,0,.3)">
+      <div class="type-weight-num" style="color:var(--orange)">500 ★</div>
+      <div style="font-family:var(--font);font-weight:500;font-size:28px;color:var(--txt-hi)">Ag</div>
+      <div style="font-size:10px;color:var(--txt-lo);margin-top:8px">Medium — Wordmark, UI labels</div>
+    </div>
+    <div class="type-weight-card">
+      <div class="type-weight-num">600</div>
+      <div style="font-family:var(--font);font-weight:600;font-size:28px;color:var(--txt-hi)">Ag</div>
+      <div style="font-size:10px;color:var(--txt-lo);margin-top:8px">SemiBold — Subheadings</div>
+    </div>
+    <div class="type-weight-card">
+      <div class="type-weight-num">700</div>
+      <div style="font-family:var(--font);font-weight:700;font-size:28px;color:var(--txt-hi)">Ag</div>
+      <div style="font-size:10px;color:var(--txt-lo);margin-top:8px">Bold — Headlines, display</div>
+    </div>
+  </div>
+</section>
+
+<!-- ── BRAND VOICE ── -->
+<section id="voice" class="section">
+  <div class="section-kicker">05 — Voice</div>
+  <h2 class="section-title">Brand <span>Voice</span></h2>
+
+  <div class="voice-grid">
+    <div class="voice-card">
+      <div class="voice-pill pos">Precise</div>
+      <div class="voice-head">Speak in specifics. Never generalize.</div>
+      <div class="voice-body">Safion operates in environments where vagueness costs lives. Every piece of communication — from error messages to marketing copy — uses concrete, unambiguous language. "Flagged 3 PPE violations in Zone B" not "Detected some issues."</div>
+    </div>
+    <div class="voice-card">
+      <div class="voice-pill pos">Authoritative</div>
+      <div class="voice-head">State facts. Don't hedge.</div>
+      <div class="voice-body">We don't say "might help you detect." We say "detects." Confidence is earned through accuracy, and our voice reflects that. Active voice always. Passive constructions signal uncertainty — and Safion is not uncertain.</div>
+    </div>
+    <div class="voice-card">
+      <div class="voice-pill pos">Vigilant</div>
+      <div class="voice-head">Always-on, never anxious.</div>
+      <div class="voice-body">Vigilance isn't paranoia. We monitor continuously because that's how prevention works. Our tone is steady — never alarming for alarm's sake. We surface signal, not noise. An alert from Safion means something happened. Full stop.</div>
+    </div>
+    <div class="voice-card">
+      <div class="voice-pill neg">Not This</div>
+      <div class="voice-head">Never alarmist, never vague, never casual.</div>
+      <div class="voice-body">Safion is not a startup chatbot. We don't use emoji in product copy. We don't say "Oops!" We don't use exclamation points. We don't say "leverage synergies." Safety is serious — our language reflects that gravity without becoming cold or robotic.</div>
+    </div>
+  </div>
+
+  <div class="voice-examples">
+    <div class="example-card do">
+      <div class="example-tag do">✓ Write Like This</div>
+      <div class="example-copy">"Stream 04 — hardhat violation detected at 14:32:07. Confidence: 97.4%. Operator notified."</div>
+    </div>
+    <div class="example-card dont">
+      <div class="example-tag dont">✗ Not Like This</div>
+      <div class="example-copy">"Looks like we may have spotted something! A possible safety issue might have been detected in one of your cameras 🎥"</div>
+    </div>
+    <div class="example-card do">
+      <div class="example-tag do">✓ Write Like This</div>
+      <div class="example-copy">"Safion processes 30 frames per second. It doesn't blink. It doesn't fatigue. It doesn't miss."</div>
+    </div>
+    <div class="example-card dont">
+      <div class="example-tag dont">✗ Not Like This</div>
+      <div class="example-copy">"Our cutting-edge AI solution leverages next-gen computer vision to potentially help you maybe improve workplace safety outcomes!"</div>
+    </div>
+  </div>
+</section>
+
+<!-- ── DO & DON'T ── -->
+<section id="dontdo" class="section">
+  <div class="section-kicker">06 — Usage</div>
+  <h2 class="section-title">Do <span>&amp;</span> Don't</h2>
+
+  <div class="dontdo-grid">
+    <div class="dd-card do">
+      <div class="dd-tag do">✓ Do</div>
+      <svg width="80" height="100" viewBox="0 0 123 152">
+        <rect x="8"  y="8"   width="20" height="20" rx="8" fill="#181826"/>
+        <rect x="37" y="8"   width="20" height="20" rx="8" fill="#F54F00"/>
+        <rect x="66" y="8"   width="20" height="20" rx="8" fill="#F54F00"/>
+        <rect x="95" y="8"   width="20" height="20" rx="8" fill="#F54F00"/>
+        <rect x="8"  y="37"  width="20" height="20" rx="8" fill="#F54F00"/>
+        <rect x="37" y="37"  width="20" height="20" rx="8" fill="#181826"/>
+        <rect x="66" y="37"  width="20" height="20" rx="8" fill="#181826"/>
+        <rect x="95" y="37"  width="20" height="20" rx="8" fill="#181826"/>
+        <rect x="8"  y="66"  width="20" height="20" rx="8" fill="#181826"/>
+        <rect x="37" y="66"  width="20" height="20" rx="8" fill="#F54F00"/>
+        <rect x="66" y="66"  width="20" height="20" rx="8" fill="#F54F00"/>
+        <rect x="95" y="66"  width="20" height="20" rx="8" fill="#181826"/>
+        <rect x="8"  y="95"  width="20" height="20" rx="8" fill="#181826"/>
+        <rect x="37" y="95"  width="20" height="20" rx="8" fill="#181826"/>
+        <rect x="66" y="95"  width="20" height="20" rx="8" fill="#181826"/>
+        <rect x="95" y="95"  width="20" height="20" rx="8" fill="#F54F00"/>
+        <rect x="8"  y="124" width="20" height="20" rx="8" fill="#F54F00"/>
+        <rect x="37" y="124" width="20" height="20" rx="8" fill="#F54F00"/>
+        <rect x="66" y="124" width="20" height="20" rx="8" fill="#F54F00"/>
+        <rect x="95" y="124" width="20" height="20" rx="8" fill="#181826"/>
+      </svg>
+      <div class="dd-note">Use the mark on dark backgrounds with full contrast. Preserve the exact node states — no active/inactive inversions.</div>
+    </div>
+    <div class="dd-card dont">
+      <div class="dd-tag dont">✗ Don't</div>
+      <!-- Distorted mark with wrong colors as a "don't" example -->
+      <svg width="80" height="100" viewBox="0 0 123 152" style="opacity:.55;filter:hue-rotate(120deg)">
+        <rect x="8"  y="8"   width="20" height="20" rx="2" fill="#44AA00"/>
+        <rect x="37" y="8"   width="20" height="20" rx="2" fill="#AAAAAA"/>
+        <rect x="66" y="8"   width="20" height="20" rx="2" fill="#44AA00"/>
+        <rect x="95" y="8"   width="20" height="20" rx="2" fill="#AAAAAA"/>
+        <rect x="8"  y="37"  width="20" height="20" rx="2" fill="#AAAAAA"/>
+        <rect x="37" y="37"  width="20" height="20" rx="2" fill="#44AA00"/>
+        <rect x="66" y="37"  width="20" height="20" rx="2" fill="#AAAAAA"/>
+        <rect x="95" y="37"  width="20" height="20" rx="2" fill="#44AA00"/>
+        <rect x="8"  y="66"  width="20" height="20" rx="2" fill="#44AA00"/>
+        <rect x="37" y="66"  width="20" height="20" rx="2" fill="#AAAAAA"/>
+        <rect x="66" y="66"  width="20" height="20" rx="2" fill="#44AA00"/>
+        <rect x="95" y="66"  width="20" height="20" rx="2" fill="#AAAAAA"/>
+        <rect x="8"  y="95"  width="20" height="20" rx="2" fill="#AAAAAA"/>
+        <rect x="37" y="95"  width="20" height="20" rx="2" fill="#44AA00"/>
+        <rect x="66" y="95"  width="20" height="20" rx="2" fill="#AAAAAA"/>
+        <rect x="95" y="95"  width="20" height="20" rx="2" fill="#44AA00"/>
+        <rect x="8"  y="124" width="20" height="20" rx="2" fill="#44AA00"/>
+        <rect x="37" y="124" width="20" height="20" rx="2" fill="#AAAAAA"/>
+        <rect x="66" y="124" width="20" height="20" rx="2" fill="#44AA00"/>
+        <rect x="95" y="124" width="20" height="20" rx="2" fill="#AAAAAA"/>
+      </svg>
+      <div class="dd-note">Don't recolor the mark, change the border-radius to sharp corners, or alter the node pattern. Don't apply drop shadows or gradients.</div>
+    </div>
+    <div class="dd-card do">
+      <div class="dd-tag do">✓ Do</div>
+      <div style="font-family:var(--font);font-weight:500;font-size:22px;letter-spacing:.3em;color:#EDEDF4;text-transform:uppercase">SAFION</div>
+      <div class="dd-note">Use Space Grotesk 500, all-caps, letter-spacing 0.30em for the wordmark. Frost (#EDEDF4) on dark, Near-Black (#1A1A2C) on light.</div>
+    </div>
+    <div class="dd-card dont">
+      <div class="dd-tag dont">✗ Don't</div>
+      <div style="font-family:Georgia,serif;font-weight:700;font-size:22px;color:#9966FF;text-transform:uppercase;font-style:italic">SAFION</div>
+      <div class="dd-note">Don't substitute the typeface, apply italic, use off-brand colors like purple, or change the case. The wordmark is not a design element — it's a legal mark.</div>
+    </div>
+  </div>
+</section>
+
+<!-- ── FOOTER ── -->
+<footer class="foot">
+  <div class="foot-left">
+    Safion Brand Guidelines · Version 1.0<br/>
+    <span style="color:var(--txt-lo)">All assets and specifications are proprietary.</span>
+  </div>
+  <div class="foot-right">
+    Questions → <span class="foot-orange">brand@safion.ai</span>
+  </div>
+</footer>
+
+</main>
+
+<script>
+// Scrollspy
+const links = document.querySelectorAll('.nav-links a');
+const sections = document.querySelectorAll('section[id], footer');
+const observer = new IntersectionObserver(entries => {
+  entries.forEach(e => {
+    if (e.isIntersecting) {
+      links.forEach(l => l.classList.remove('active'));
+      const active = document.querySelector(`.nav-links a[href="#${e.target.id}"]`);
+      if (active) active.classList.add('active');
+    }
+  });
+}, {threshold: 0.3});
+sections.forEach(s => observer.observe(s));
+</script>
+
+</body>
+</html>
