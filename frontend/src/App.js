@@ -98,20 +98,17 @@ const Sidebar = ({ view, setView, open, setOpen, serverStatus, reviewCount, sugg
     <aside className={`fixed top-0 left-0 h-full bg-card-secondary border-r border-border z-50 transition-all duration-300
                        ${open ? 'translate-x-0 w-56' : '-translate-x-full lg:translate-x-0 w-0 lg:w-16'}`}>
       <div className="flex flex-col h-full">
-        <div className="p-3 border-b border-border flex items-center justify-between min-h-[56px]">
+        <div className="p-3 border-b border-border relative min-h-[56px]">
           {open ? (
-            <>
-              <button onClick={() => setOpen(false)} className="p-2 text-text hover:bg-border rounded-md"><ChevronLeft size={17} /></button>
-              <div className="flex items-center gap-[20px]">
-                <img src={logo} alt="Safion Logo" className="h-8 w-auto flex-shrink-0" />
-                <span className="font-sans font-medium uppercase tracking-[0.3em] text-[36px] leading-none text-text">SAFION</span>
-              </div>
-              <div className="w-9" />
-            </>
+            <div className="flex flex-col items-center justify-center w-full py-2">
+              <button onClick={() => setOpen(false)} className="absolute top-3 left-3 p-2 text-text hover:bg-border rounded-md"><ChevronLeft size={17} /></button>
+              <img src={logo} alt="Safion Logo" className="w-[64px] h-[82px] mb-2" />
+              <span className="font-sans font-medium uppercase text-text" style={{ fontSize: '18px', letterSpacing: '0.42em' }}>SAFION</span>
+            </div>
           ) : (
-            <div className="flex justify-center w-full">
+            <div className="flex flex-col items-center justify-center w-full h-full py-2">
               <button onClick={() => setOpen(true)} className="p-2 text-text hover:bg-border rounded-md">
-                <img src={logo} alt="Safion Logo" className="w-5 h-auto" />
+                <img src={logo} alt="Safion Logo" className="w-6 h-auto" />
               </button>
             </div>
           )}
