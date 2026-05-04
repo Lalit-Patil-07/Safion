@@ -11,7 +11,7 @@ import {
   Star, TrendingUp, Filter, Zap, Link2, LogOut
 } from 'lucide-react';
 import API from './config';
-import logo from './logo.svg';
+
 
 const VIOLATION_COLORS = {
   'NO-Hardhat':     '#EF4444',
@@ -81,6 +81,32 @@ const ImageModal = ({ imageUrl, onClose }) => {
 };
 
 // ── Sidebar ───────────────────────────────────────────────────────────────────
+
+const SafionLogo = ({ className, width, height }) => (
+  <svg width={width} height={height} viewBox="0 0 123 152" className={className}>
+    <rect x="8"  y="8"   width="20" height="20" rx="8" fill="#181826"/>
+    <rect x="37" y="8"   width="20" height="20" rx="8" fill="#F54F00"/>
+    <rect x="66" y="8"   width="20" height="20" rx="8" fill="#F54F00"/>
+    <rect x="95" y="8"   width="20" height="20" rx="8" fill="#F54F00"/>
+    <rect x="8"  y="37"  width="20" height="20" rx="8" fill="#F54F00"/>
+    <rect x="37" y="37"  width="20" height="20" rx="8" fill="#181826"/>
+    <rect x="66" y="37"  width="20" height="20" rx="8" fill="#181826"/>
+    <rect x="95" y="37"  width="20" height="20" rx="8" fill="#181826"/>
+    <rect x="8"  y="66"  width="20" height="20" rx="8" fill="#181826"/>
+    <rect x="37" y="66"  width="20" height="20" rx="8" fill="#F54F00"/>
+    <rect x="66" y="66"  width="20" height="20" rx="8" fill="#F54F00"/>
+    <rect x="95" y="66"  width="20" height="20" rx="8" fill="#181826"/>
+    <rect x="8"  y="95"  width="20" height="20" rx="8" fill="#181826"/>
+    <rect x="37" y="95"  width="20" height="20" rx="8" fill="#181826"/>
+    <rect x="66" y="95"  width="20" height="20" rx="8" fill="#181826"/>
+    <rect x="95" y="95"  width="20" height="20" rx="8" fill="#F54F00"/>
+    <rect x="8"  y="124" width="20" height="20" rx="8" fill="#F54F00"/>
+    <rect x="37" y="124" width="20" height="20" rx="8" fill="#F54F00"/>
+    <rect x="66" y="124" width="20" height="20" rx="8" fill="#F54F00"/>
+    <rect x="95" y="124" width="20" height="20" rx="8" fill="#181826"/>
+  </svg>
+);
+
 const NAV = [
   { id: 'dashboard',   icon: BarChart2,    label: 'Dashboard' },
   { id: 'identities',  icon: Users,        label: 'Identities' },
@@ -96,19 +122,19 @@ const Sidebar = ({ view, setView, open, setOpen, serverStatus, reviewCount, sugg
   <>
     {open && <div className="fixed inset-0 bg-black/50 z-40 lg:hidden" onClick={() => setOpen(false)} />}
     <aside className={`fixed top-0 left-0 h-full bg-card-secondary border-r border-border z-50 transition-all duration-300
-                       ${open ? 'translate-x-0 w-56' : '-translate-x-full lg:translate-x-0 w-0 lg:w-16'}`}>
+                       ${open ? 'translate-x-0 w-56' : 'translate-x-0 w-16'}`}>
       <div className="flex flex-col h-full">
-        <div className="p-3 border-b border-border relative min-h-[56px]">
+        <div className="p-3 border-b border-border relative min-h-[56px] overflow-hidden">
           {open ? (
-            <div className="flex flex-col items-center justify-center w-full py-2">
-              <button onClick={() => setOpen(false)} className="absolute top-3 left-3 p-2 text-text hover:bg-border rounded-md"><ChevronLeft size={17} /></button>
-              <img src={logo} alt="Safion Logo" className="w-[64px] h-[82px] mb-2" />
+            <div className="flex flex-col items-center justify-center w-full py-2 gap-4">
+              <button onClick={() => setOpen(false)} className="absolute top-3 left-3 p-2 text-text hover:bg-border rounded-md z-10"><ChevronLeft size={17} /></button>
+              <SafionLogo width="64" height="82" className="flex-shrink-0" />
               <span className="font-sans font-medium uppercase text-text" style={{ fontSize: '18px', letterSpacing: '0.42em' }}>SAFION</span>
             </div>
           ) : (
             <div className="flex flex-col items-center justify-center w-full h-full py-2">
               <button onClick={() => setOpen(true)} className="p-2 text-text hover:bg-border rounded-md">
-                <img src={logo} alt="Safion Logo" className="w-6 h-auto" />
+                <SafionLogo width="24" height="30" className="flex-shrink-0" />
               </button>
             </div>
           )}
@@ -191,7 +217,7 @@ const DashboardPage = ({ setView }) => {
 
   return (
     <div className="p-6 pt-12 lg:pt-6 w-full max-w-7xl mx-auto">
-      <h2 className="text-2xl font-bold text-text mb-6 mt-16 lg:mt-0 lg:ml-0">Dashboard</h2>
+      <h2 className="text-2xl font-bold text-text mb-6">Dashboard</h2>
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
         <StatCard label="Total identities"  value={stats?.total_identities}  icon={Users}         color="#3b82f6" />
         <StatCard label="Confirmed"         value={stats?.confirmed_count}   icon={CheckCircle}    color="#22c55e" />
@@ -1260,7 +1286,7 @@ const SettingsPage = ({ rtspStreams, setRtspStreams, startStream, serverStatus }
 
   return (
     <div className="p-6 pt-12 lg:pt-6 max-w-3xl">
-      <h2 className="text-2xl font-bold text-text mb-5 mt-16 lg:mt-0">Settings</h2>
+      <h2 className="text-2xl font-bold text-text mb-5">Settings</h2>
       <div className="bg-card border border-border rounded-xl p-5">
         <div className="flex items-center justify-between mb-4">
           <h3 className="font-semibold text-text">RTSP Streams</h3>
@@ -1419,7 +1445,7 @@ export default function App() {
       <Sidebar view={view} setView={setView} open={sidebarOpen} setOpen={setSidebarOpen}
                serverStatus={serverStatus} reviewCount={reviewCount} suggestionsCount={suggestionsCount}
                user={user} onLogout={logout} />
-      <main className={`flex-1 h-screen overflow-y-auto transition-all duration-300 ${sidebarOpen ? 'lg:ml-56' : 'lg:ml-16'}`}>
+      <main className={`flex-1 h-screen overflow-y-auto transition-all duration-300 pt-16 lg:pt-0 ${sidebarOpen ? 'ml-56 lg:ml-56' : 'ml-16 lg:ml-16'}`}>
         {renderPage()}
       </main>
       <input ref={fileInputRef} type="file" accept="video/*" onChange={handleVideoUpload} className="hidden" />
