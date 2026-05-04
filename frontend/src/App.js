@@ -103,7 +103,7 @@ const Sidebar = ({ view, setView, open, setOpen, serverStatus, reviewCount, sugg
             <>
               <button onClick={() => setOpen(false)} className="p-2 text-text hover:bg-border rounded-md"><ChevronLeft size={17} /></button>
               <div className="flex items-center gap-[20px]">
-                <img src={logo} alt="Safion Logo" className="w-[52px] h-[66px] flex-shrink-0" />
+                <img src={logo} alt="Safion Logo" className="h-8 w-auto flex-shrink-0" />
                 <span className="font-sans font-medium uppercase tracking-[0.3em] text-[36px] leading-none text-text">SAFION</span>
               </div>
               <div className="w-9" />
@@ -193,7 +193,7 @@ const DashboardPage = ({ setView }) => {
   }, []);
 
   return (
-    <div className="p-6 w-full max-w-7xl mx-auto">
+    <div className="p-6 pt-12 lg:pt-6 w-full max-w-7xl mx-auto">
       <h2 className="text-2xl font-bold text-text mb-6">Dashboard</h2>
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
         <StatCard label="Total identities"  value={stats?.total_identities}  icon={Users}         color="#3b82f6" />
@@ -1262,7 +1262,7 @@ const SettingsPage = ({ rtspStreams, setRtspStreams, startStream, serverStatus }
   const update = (id, f, v) => setRtspStreams(p => p.map(s => s.id === id ? { ...s, [f]: v } : s));
 
   return (
-    <div className="p-6 max-w-3xl">
+    <div className="p-6 pt-12 lg:pt-6 max-w-3xl">
       <h2 className="text-2xl font-bold text-text mb-5">Settings</h2>
       <div className="bg-card border border-border rounded-xl p-5">
         <div className="flex items-center justify-between mb-4">
@@ -1422,7 +1422,7 @@ export default function App() {
       <Sidebar view={view} setView={setView} open={sidebarOpen} setOpen={setSidebarOpen}
                serverStatus={serverStatus} reviewCount={reviewCount} suggestionsCount={suggestionsCount}
                user={user} onLogout={logout} />
-      <main className={`flex-1 h-screen overflow-y-auto transition-all duration-300 ${sidebarOpen ? 'lg:ml-56' : 'lg:ml-16'}`}>
+      <main className={`flex-1 h-screen overflow-y-auto transition-all duration-300 pt-16 lg:pt-0 ${sidebarOpen ? 'lg:ml-56' : 'lg:ml-16'}`}>
         {renderPage()}
       </main>
       <input ref={fileInputRef} type="file" accept="video/*" onChange={handleVideoUpload} className="hidden" />
