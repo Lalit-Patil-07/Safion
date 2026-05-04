@@ -111,7 +111,7 @@ const Sidebar = ({ view, setView, open, setOpen, serverStatus, reviewCount, sugg
           ) : (
             <div className="flex justify-center w-full">
               <button onClick={() => setOpen(true)} className="p-2 text-text hover:bg-border rounded-md">
-                <Shield size={17} className="text-primary" />
+                <img src={logo} alt="Safion Logo" className="w-5 h-auto" />
               </button>
             </div>
           )}
@@ -194,7 +194,7 @@ const DashboardPage = ({ setView }) => {
 
   return (
     <div className="p-6 pt-12 lg:pt-6 w-full max-w-7xl mx-auto">
-      <h2 className="text-2xl font-bold text-text mb-6">Dashboard</h2>
+      <h2 className="text-2xl font-bold text-text mb-6 mt-16 lg:mt-0 lg:ml-0">Dashboard</h2>
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
         <StatCard label="Total identities"  value={stats?.total_identities}  icon={Users}         color="#3b82f6" />
         <StatCard label="Confirmed"         value={stats?.confirmed_count}   icon={CheckCircle}    color="#22c55e" />
@@ -1263,7 +1263,7 @@ const SettingsPage = ({ rtspStreams, setRtspStreams, startStream, serverStatus }
 
   return (
     <div className="p-6 pt-12 lg:pt-6 max-w-3xl">
-      <h2 className="text-2xl font-bold text-text mb-5">Settings</h2>
+      <h2 className="text-2xl font-bold text-text mb-5 mt-16 lg:mt-0">Settings</h2>
       <div className="bg-card border border-border rounded-xl p-5">
         <div className="flex items-center justify-between mb-4">
           <h3 className="font-semibold text-text">RTSP Streams</h3>
@@ -1422,7 +1422,7 @@ export default function App() {
       <Sidebar view={view} setView={setView} open={sidebarOpen} setOpen={setSidebarOpen}
                serverStatus={serverStatus} reviewCount={reviewCount} suggestionsCount={suggestionsCount}
                user={user} onLogout={logout} />
-      <main className={`flex-1 h-screen overflow-y-auto transition-all duration-300 pt-16 lg:pt-0 ${sidebarOpen ? 'lg:ml-56' : 'lg:ml-16'}`}>
+      <main className={`flex-1 h-screen overflow-y-auto transition-all duration-300 ${sidebarOpen ? 'lg:ml-56' : 'lg:ml-16'}`}>
         {renderPage()}
       </main>
       <input ref={fileInputRef} type="file" accept="video/*" onChange={handleVideoUpload} className="hidden" />
