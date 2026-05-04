@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Shield, Loader } from 'lucide-react';
 import { useAuth } from './AuthContext';
+import logo from '../logo.svg';
 import API from '../config';
 
 export default function LoginPage() {
@@ -33,14 +34,10 @@ export default function LoginPage() {
   return (
     <div className="min-h-screen bg-background flex items-center justify-center">
       <div className="bg-card border border-border rounded-xl p-8 w-full max-w-sm shadow-2xl">
-        <div className="flex items-center gap-3 mb-8">
-          <div className="p-2 rounded-lg" style={{ backgroundColor: '#5a51a218' }}>
-            <Shield size={22} className="text-primary" />
-          </div>
-          <div>
-            <h1 className="text-lg font-bold text-text leading-none">Safion</h1>
-            <p className="text-xs text-text-secondary mt-0.5">Safety monitoring system</p>
-          </div>
+        <div className="flex flex-col items-center mb-8">
+          <img src={logo} alt="Safion Logo" className="w-[64px] h-[82px] mb-4" />
+          <span className="font-sans font-medium uppercase text-text" style={{ fontSize: '18px', letterSpacing: '0.42em' }}>SAFION</span>
+          <p className="text-xs text-text-secondary mt-2">Safety monitoring system</p>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
