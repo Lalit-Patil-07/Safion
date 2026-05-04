@@ -11,6 +11,7 @@ import {
   Star, TrendingUp, Filter, Zap, Link2, LogOut
 } from 'lucide-react';
 import API from './config';
+import logo from './logo.svg';
 
 const VIOLATION_COLORS = {
   'NO-Hardhat':     '#EF4444',
@@ -101,7 +102,10 @@ const Sidebar = ({ view, setView, open, setOpen, serverStatus, reviewCount, sugg
           {open ? (
             <>
               <button onClick={() => setOpen(false)} className="p-2 text-text hover:bg-border rounded-md"><ChevronLeft size={17} /></button>
-              <span className="text-lg font-bold text-text">Safion</span>
+              <div className="flex items-center gap-[20px]">
+                <img src={logo} alt="Safion Logo" className="w-[52px] h-[66px] flex-shrink-0" />
+                <span className="font-sans font-medium uppercase tracking-[0.3em] text-[36px] leading-none text-text">SAFION</span>
+              </div>
               <div className="w-9" />
             </>
           ) : (
