@@ -107,12 +107,6 @@ sudo -u postgres psql -c \
 ```
 A row must appear. If it does not, the extension install failed — do not proceed.
 
-**Run the setup script manually:**
-```bash
-bash scripts/setup_db.sh
-```
-This is required for local development to create the database user, database, grants privileges, and enable the `vector` extension.
-
 ---
 
 #### 2. Configure environment
