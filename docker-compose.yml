@@ -9,7 +9,7 @@ services:
       POSTGRES_PASSWORD: ${DB_PASSWORD}
       POSTGRES_DB: ${DB_NAME}
     volumes:
-      - safion_pgdata:/var/lib/postgresql/data
+      - safion_pgdata:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
       interval: 5s
@@ -17,7 +17,7 @@ services:
       retries: 5
 
   app:
-    build: .
+    image: safion:latest  # <--- CHANGED FROM 'build: .'
     container_name: safion_app
     restart: unless-stopped
     env_file:
@@ -32,6 +32,7 @@ services:
     ports:
       - "5000:5000"
     volumes:
+      - ./.env:/app/.env:ro
       - safion_identity:/app/backend/identity_storage
       - safion_insightface:/root/.insightface
       - safion_data:/app/backend/violations_images
