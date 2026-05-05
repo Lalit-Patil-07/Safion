@@ -45,10 +45,11 @@ ENV PATH="/opt/venv/bin:$PATH"
 
 COPY backend/ ./
 COPY --from=frontend-builder /app/frontend /app/frontend
-
-# ADDED: copy the YOLO model from the build context root into the image at the
-# path config.py resolves to: /app/backend/../best.pt == /app/best.pt
 COPY best.pt /app/best.pt
 
-EXPOSE 5000
-CMD ["python3", "run.py"]
+# ADDED: entrypoint handles .env loading, DB readiness, and Gunicorn startup
+COPY scripts/entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
+
+# CHANGED: was `CMD ["python3", "run.py"]`
+CMD ["/app/entrypoint.sh"]

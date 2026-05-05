@@ -1,10 +1,14 @@
 """
-Entry point for development and production.
-For production use gunicorn:
-    gunicorn "app:create_app()" -w 1 -b 0.0.0.0:5000 --timeout 120
-Note: -w 1 (single worker) is intentional — the YOLO model and face pipeline
-are in-process singletons. Scale horizontally with multiple containers,
-not multiple gunicorn workers in the same process.
+Local development entry point.
+-------------------------------
+NOT used in Docker — the container uses scripts/entrypoint.sh + Gunicorn.
+
+For production use Gunicorn directly:
+    gunicorn "app:create_app()" -w 1 -b 0.0.0.0:5000 --timeout 180
+
+Note: -w 1 (single worker) is intentional — YOLO, InsightFace, and
+StreamManager are in-process GPU singletons.  Scale horizontally with
+multiple containers, not multiple gunicorn workers in the same process.
 """
 import os
 import sys
@@ -14,9 +18,7 @@ import time
 def _load_dotenv() -> None:
     """
     Read .env from the project root and inject any missing variables into
-    os.environ. Does not override variables already set in the shell.
-    Supports: KEY=value, KEY="value", KEY='value', inline # comments.
-    No external dependencies.
+    os.environ.  Does not override variables already set in the shell.
     """
     env_path = os.path.abspath(
         os.path.join(os.path.dirname(__file__), "..", ".env")
@@ -40,9 +42,6 @@ def _wait_for_db(retries: int = 10, delay: float = 3.0) -> None:
     """
     Block until PostgreSQL is reachable and the vector extension is present,
     or exit with a clear error after `retries` attempts.
-
-    Uses only psycopg2 (already a hard dependency) and the same DSN the
-    application uses — no extra dependencies, no schema changes.
     """
     import psycopg2
     from config import Config
@@ -59,12 +58,10 @@ def _wait_for_db(retries: int = 10, delay: float = 3.0) -> None:
             conn.close()
 
             if result is None:
-                # DB is up but vector extension is missing — surface clearly.
                 print(
                     "ERROR: PostgreSQL is reachable but the 'vector' extension "
                     "is not installed.\n"
-                    "       Ensure init_db.sh ran inside the db container, or "
-                    "run: CREATE EXTENSION IF NOT EXISTS vector;",
+                    "       Run: CREATE EXTENSION IF NOT EXISTS vector;",
                     file=sys.stderr,
                 )
                 sys.exit(1)
@@ -80,7 +77,8 @@ def _wait_for_db(retries: int = 10, delay: float = 3.0) -> None:
                 time.sleep(delay)
 
     print(
-        f"ERROR: Database not available after {retries} attempts ({retries * delay:.0f}s).\n"
+        f"ERROR: Database not available after {retries} attempts "
+        f"({retries * delay:.0f}s).\n"
         "       Check that PostgreSQL is running and DB_* variables are correct.",
         file=sys.stderr,
     )
@@ -91,18 +89,7 @@ if __name__ == "__main__":
     _load_dotenv()
     _wait_for_db(retries=10, delay=3.0)
 
+    # create_app() handles db.create_all(), admin bootstrap, and service init.
     from app import create_app
-    from extensions import db
-    from auth.utils import ensure_admin_user
-
-    app = create_app(config_overrides={"_SKIP_SERVICES": True})
-
-    with app.app_context():
-        db.create_all()
-
-    ensure_admin_user(app)
-
-    from app import _init_services
-    _init_services(app)
-
+    app = create_app()
     app.run(host="0.0.0.0", port=5000, debug=False, threaded=True)

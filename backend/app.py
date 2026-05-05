@@ -31,7 +31,16 @@ def create_app(config_class=Config, config_overrides=None) -> Flask:
     _register_frontend_catch_all(app)
     _register_error_handlers(app)
 
-    if not app.config.get("_SKIP_SERVICES", False):
+    # CHANGED: was `if not app.config.get("_SKIP_SERVICES", False): _init_services(app)`
+    #
+    # Skip in test mode — TestConfig sets TESTING=True.  Tests create the schema
+    # themselves in their fixtures and do not need GPU services running.
+    # In all other contexts (Docker via entrypoint.sh, local dev via run.py)
+    # TESTING is unset, so the full initialization runs here.
+    if not app.config.get("TESTING", False):
+        with app.app_context():
+            db.create_all()
+        _ensure_admin(app)
         _init_services(app)
 
     return app
@@ -62,7 +71,7 @@ def _init_extensions(app):
 
     with app.app_context():
         import auth.models   # noqa: F401
-        import face.models   # noqa: F401   ← registers StreamEvent with SQLAlchemy metadata
+        import face.models   # noqa: F401
 
         db.session.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         db.session.commit()
@@ -163,6 +172,11 @@ def _register_error_handlers(app):
     def server_error(_e):  return jsonify({"error": "Internal server error."}), 500
 
 
+def _ensure_admin(app):
+    from auth.utils import ensure_admin_user
+    ensure_admin_user(app)
+
+
 def _init_services(app):
     from detection.yolo_service import YOLOService
     from detection.batcher import YOLOBatcher
@@ -194,8 +208,3 @@ def _init_services(app):
 
     import atexit
     atexit.register(lambda: (stream_manager.stop_all(), task_queue.shutdown(), batcher.shutdown()))
-
-
-def _ensure_admin(app):
-    from auth.utils import ensure_admin_user
-    ensure_admin_user(app)
