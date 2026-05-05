@@ -1,4 +1,7 @@
-# Safion - PPE Detection System
+<div align="center">
+  <img src="frontend/public/logo.svg" alt="Safion Logo" width="200" />
+  <h1>Safion - PPE Detection System</h1>
+</div>
 
 Safion is a real-time Personal Protective Equipment (PPE) detection system designed to enhance workplace safety. It uses a deep learning model to monitor video streams from various sources, detect PPE compliance (hardhats, masks, safety vests), and log violations for review.
 
@@ -51,7 +54,7 @@ cp .env.example .env
 **Prerequisites:** Docker with **NVIDIA Container Toolkit** installed.
 > ⚠️ **Strict Requirement:** The `docker-compose.yml` uses GPU resource reservations. Without the NVIDIA Container Toolkit installed and configured on your host, the container will fail to start.
 
-> Docker deployment uses a pgvector-enabled PostgreSQL container (`pgvector/pgvector:pg18`). No manual PostgreSQL installation is required.
+> Docker deployment uses a pgvector-enabled PostgreSQL container (`pgvector/pgvector:pg18`). No manual PostgreSQL installation is required. Database initialization is handled automatically via `scripts/init_db.sh` mapped to `/docker-entrypoint-initdb.d/`. `setup_db.sh` is strictly for local development and should NOT be used with Docker.
 > **Note on AI Model:** The `best.pt` YOLO model weights are baked directly into the Docker image. If you update the model file, you must rebuild the image.
 
 ```bash
@@ -71,7 +74,7 @@ Open `http://localhost:5000`.
 |---|---|
 | `scripts/install_postgres.sh` | Installs PostgreSQL 18 and the pgvector system extension |
 | `scripts/setup_db.sh` | Creates the database user, database, grants, and enables the extension |
-| `backend/run.py` | Auto-triggers `setup_db.sh` on first start if DB is not ready |
+| `backend/run.py` | Starts the Flask development server and checks database readiness |
 
 #### System Requirements
 
@@ -104,6 +107,12 @@ sudo -u postgres psql -c \
 ```
 A row must appear. If it does not, the extension install failed — do not proceed.
 
+**Run the setup script manually:**
+```bash
+bash scripts/setup_db.sh
+```
+This is required for local development to create the database user, database, grants privileges, and enable the `vector` extension.
+
 ---
 
 #### 2. Configure environment
@@ -122,7 +131,7 @@ cp .env.example .env
 bash scripts/setup_db.sh
 ```
 
-Creates the PostgreSQL user, database, grants privileges, and enables the `vector` extension. Fully idempotent.
+Creates the PostgreSQL user, database, grants privileges, and enables the `vector` extension. Fully idempotent. This step must be run manually for local development.
 
 If the `postgres` superuser has a password:
 ```bash
@@ -216,8 +225,6 @@ cd frontend && npm install
 python backend/run.py
 ```
 
-On first run, `run.py` detects if the database or `vector` extension is missing and runs `setup_db.sh` automatically. On subsequent starts it performs a single fast check and skips setup.
-
 **Frontend** (separate terminal):
 ```bash
 cd frontend && npm start
@@ -245,7 +252,7 @@ Opens at `http://localhost:3000`.
 ppe-detection-system/
 ├── backend/
 │   ├── app.py                  # Flask application factory
-│   ├── run.py                  # Development entry point (auto-setup)
+│   ├── run.py                  # Development entry point
 │   ├── config.py               # Configuration (reads from .env)
 │   ├── auth/                   # JWT authentication
 │   ├── detection/              # YOLO inference + violation association
