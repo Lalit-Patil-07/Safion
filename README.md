@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="frontend/public/logo.svg" alt="Safion Logo" width="200" />
+  <img src="./design/logo.png" alt="Safion Logo" width="200" />
   <h1>Safion - PPE Detection System</h1>
 </div>
 
