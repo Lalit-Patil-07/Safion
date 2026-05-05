@@ -655,8 +655,14 @@ class StreamWorker:
             self._current_skip = max(self._current_skip - 1, 0)
 
     # ── Priority detection ────────────────────────────────────────────────────
-
+    
     def _frame_priority(self) -> int:
+        """
+        Returns the processing priority for the current frame.
+          2 — a violation was detected last frame; process without skipping
+          1 — at least one active track has no identity yet; half skip rate
+          0 — all tracks identified, no recent violation; full skip allowed
+        """
         if self._last_had_violation:
             return 2
         if any(t.identity_id is None for t in self.tracker.active_tracks):
@@ -706,6 +712,13 @@ class StreamWorker:
                 self.output_queue.put_nowait(pf)
             except queue.Full:
                 pass
+
+            # ADDED: flush buffered violations periodically so they reach the
+            # database during runtime, not only when the stream stops.
+            # _processing_loop had this check but is never called; this is the
+            # active loop, so the timeout flush belongs here.
+            if (time.monotonic() - self._violation_last_flush) >= self._violation_batch_timeout:
+                self._flush_violations()
 
     # ── Processing loop ───────────────────────────────────────────────────────
 
