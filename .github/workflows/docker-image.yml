@@ -2,10 +2,11 @@ name: Docker Image CI/CD
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "main", "dev" ]          # build on both main and dev
+    tags:     [ "v*.*.*", "*.*.*" ]      # build on version tags: v1.6.1 or 1.6.1
   pull_request:
     branches: [ "main" ]
-  workflow_dispatch:  # Allows manual trigger
+  workflow_dispatch:
 
 env:
   REGISTRY: ghcr.io
@@ -17,7 +18,7 @@ jobs:
     permissions:
       contents: read
       packages: write
-    
+
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
@@ -51,12 +52,23 @@ jobs:
       with:
         images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
         tags: |
-          type=ref,event=branch
-          type=ref,event=pr
+          # ── Branch-based tags ────────────────────────────────────────────────
+          # dev branch   → :dev
+          type=raw,value=dev,enable=${{ github.ref == 'refs/heads/dev' }}
+          # main branch  → :latest
+          type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+
+          # ── Git tag-based tags ───────────────────────────────────────────────
+          # v1.6.1 or 1.6.1  → :1.6.1  (strips leading 'v' automatically)
           type=semver,pattern={{version}}
+          # v1.6.1 or 1.6.1  → :1.6
           type=semver,pattern={{major}}.{{minor}}
-          type=sha,prefix={{branch}}-
-          type=raw,value=latest,enable={{is_default_branch}}
+          # any tag release   → :latest  (release tags are considered stable)
+          type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/') }}
+
+          # ── Traceability ─────────────────────────────────────────────────────
+          # every build       → :sha-a1b2c3d  (short SHA, always present)
+          type=sha,prefix=sha-,format=short
 
     - name: Build and push Docker image
       uses: docker/build-push-action@v5
