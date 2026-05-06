@@ -94,12 +94,17 @@ PYEOF
 #               StreamManager). Forking after thread creation is unsafe — threads
 #               do not survive fork into worker processes. Each worker must call
 #               create_app() itself.
+# --threads 4   : allow up to 4 concurrent requests within the single worker
+#                 process. Required for browser_webcam frame POST requests
+#                 (15/s) to be handled alongside polling endpoints without
+#                 queuing up behind each other.
 #
 # Logs to stdout/stderr so `docker logs` captures everything.
 
 echo "==> Starting Gunicorn (1 worker)..."
 exec gunicorn "app:create_app()" \
     --workers       1 \
+    --threads       4 \
     --bind          0.0.0.0:5000 \
     --timeout       180 \
     --access-logfile  - \
