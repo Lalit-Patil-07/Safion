@@ -7,6 +7,7 @@
 *.pyc
 venv/
 env/
+.env
 
 # Backend generated files (runtime data)
 /backend/temp/
@@ -27,3 +28,13 @@ yarn-error.log*
 
 # Docker ignore (already handled by .dockerignore, but good practice)
 .dockerignore
+
+# sensitive user data
+backend/safion.db
+backend/violations_images/
+backend/temp/
+backend/known_faces/
+backend/identity_storage
+
+#aider configs
+.aider*

@@ -1,52 +1,55 @@
-# Stage 1: Build the React frontend
-FROM node:18-alpine AS build
+# ==========================================
+# STAGE 1: Frontend Builder
+# ==========================================
+FROM node:18-alpine AS frontend-builder
 WORKDIR /app/frontend
-COPY frontend/package*.json ./
-RUN npm install
+
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci --omit=dev
+
 COPY frontend/ ./
 RUN npm run build
 
-# Stage 2: Setup the Python backend with NVIDIA CUDA 12.9.0 support
-FROM nvidia/cuda:12.9.0-runtime-ubuntu22.04
 
-# Set environment variables
-ENV DEBIAN_FRONTEND=noninteractive
-ENV PYTHONUNBUFFERED=1
+# ==========================================
+# STAGE 2: Backend Builder
+# ==========================================
+FROM python:3.12-slim-bookworm AS backend-builder
+WORKDIR /app/backend
 
-# Install Python, pip, and essential libraries in one layer
-RUN apt-get update && apt-get install -y \
-    python3.10 \
-    python3-pip \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
-    cmake \
-    libgl1 \
-    libglib2.0-0 \
-    && apt-get clean \
+    python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Set the working directory
-WORKDIR /app
+RUN python3 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
 
-# Copy the requirements file
-COPY backend/requirements.txt .
+COPY backend/requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cu128
 
-# Install all Python dependencies and clean up in a SINGLE layer
-# This reduces peak disk usage and final layer size
-RUN pip3 install --no-cache-dir \
-        --index-url https://download.pytorch.org/whl/cu129 \
-        torch torchvision torchaudio && \
-    pip3 install --no-cache-dir -r requirements.txt && \
-    rm -rf /tmp/* /root/.cache
 
-# Copy the backend application and model
-COPY backend/app_server.py .
-COPY best.pt .
+# ==========================================
+# STAGE 3: Final Runtime Image
+# ==========================================
+FROM python:3.12-slim-bookworm
+WORKDIR /app/backend
 
-# Copy the built frontend from the 'build' stage
-COPY --from=build /app/frontend/build ./frontend/build
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgl1 \
+    libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
 
-# Expose the port
-EXPOSE 5000
+COPY --from=backend-builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
 
-# Command to run the application
-CMD ["python3", "app_server.py"]
+COPY backend/ ./
+COPY --from=frontend-builder /app/frontend /app/frontend
+COPY best.pt /app/best.pt
+
+# ADDED: entrypoint handles .env loading, DB readiness, and Gunicorn startup
+COPY scripts/entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
+
+# CHANGED: was `CMD ["python3", "run.py"]`
+CMD ["/app/entrypoint.sh"]

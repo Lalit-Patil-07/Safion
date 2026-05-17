@@ -1,17 +1,60 @@
-# Flask for the web server
-flask
+# Web framework
+flask>=3.0.0
+flask-sqlalchemy>=3.1.0
+flask-bcrypt>=1.0.1
+flask-jwt-extended>=4.6.0
 
-# YOLOv8 for object detection
-ultralytics
+# ── PyTorch (CUDA 12.8) ───────────────────────────────────────────────────────
+# Required by YOLO (ultralytics). Also preloads libcublas.so.12 / libcublasLt.so.12
+# before ONNXRuntime initialises, which is how onnxruntime-gpu finds its CUDA
+# libraries without a separate system-level CUDA toolkit install.
+#
+# Both torch and onnxruntime-gpu MUST target the same CUDA major version (12.x).
+# Mixing CUDA versions (e.g. torch cu128 + ort built for cu11) causes
+# "libcublasLt.so.12 not found" at runtime.
+#
+# Install with the CUDA 12.8 index URL:
+#   pip install -r backend/requirements.txt --extra-index-url https://download.pytorch.org/whl/cu128
+#
+# CPU-only (no GPU):
+#   pip install -r backend/requirements.txt
+#
+torch>=2.7.0
+torchvision>=0.22.0
+torchaudio>=2.7.0
 
-# OpenCV for image processing
-opencv-python
+# YOLO
+ultralytics>=8.0.0
 
-# Face recognition library
-face_recognition
+# Computer vision
+opencv-python-headless>=4.9.0
 
-# Numerical operations
-numpy
+# Face recognition — InsightFace (buffalo_l: RetinaFace + ArcFace)
+insightface>=0.7.3
 
-# Data manipulation
-pandas
+# ── ONNXRuntime — install ONLY ONE of the two lines below ────────────────────
+# Both packages register under the `onnxruntime` module name. Having both
+# installed simultaneously breaks CUDAExecutionProvider detection silently.
+# Uninstall one before switching: pip uninstall -y onnxruntime onnxruntime-gpu
+#
+# CPU (default — works everywhere):
+# onnxruntime>=1.24.0
+#
+# GPU (CUDA 12.8 — comment the line above and uncomment this one):
+onnxruntime-gpu>=1.24.0
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Clustering
+scikit-learn>=1.4.0
+
+# Numerics
+numpy>=1.26.0
+
+# Database — PostgreSQL driver
+# pgvector is NOT installed via pip — it is a PostgreSQL system-level extension.
+# See scripts/install_postgres.sh for system-level installation.
+psycopg2-binary>=2.9.0
+pgvector>=0.2.0
+
+# WSGI server (production)
+gunicorn>=21.2.0

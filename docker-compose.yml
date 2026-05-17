@@ -1,0 +1,52 @@
+services:
+
+  db:
+    image: pgvector/pgvector:pg18
+    container_name: safion_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
+    volumes:
+      - safion_pgdata:/var/lib/postgresql
+      # ── ADDED: run init_db.sh on first start (data dir empty) ──
+      - ./scripts/init_db.sh:/docker-entrypoint-initdb.d/init_db.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  app:
+    image: safion:latest
+    container_name: safion_app
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DB_HOST: db
+      IDENTITY_STORAGE_PATH: /app/backend/identity_storage
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./.env:/app/.env:ro
+      - safion_identity:/app/backend/identity_storage
+      - safion_insightface:/root/.insightface
+      - safion_data:/app/backend/violations_images
+      - safion_temp:/app/backend/temp
+    depends_on:
+      db:
+        condition: service_healthy
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+
+volumes:
+  safion_pgdata:
+  safion_insightface:
+  safion_data:
+  safion_temp:
+  safion_identity:
