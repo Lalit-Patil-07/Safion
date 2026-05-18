@@ -28,14 +28,14 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 # Copy dependency files — uv needs both to resolve the lock
 COPY pyproject.toml uv.lock ./
 
-# Install into a virtual env at /opt/venv
-# --frozen            → respect uv.lock exactly, no re-resolution
-# --no-install-project → skip installing the project package itself (no src layout needed)
-RUN uv sync --frozen --no-install-project --no-dev \
-    --python /usr/local/bin/python3 \
+# Create the venv at /opt/venv, then sync into it
+# UV_PROJECT_ENVIRONMENT tells uv sync which venv to target
+RUN uv venv /opt/venv --python /usr/local/bin/python3
+
+RUN UV_PROJECT_ENVIRONMENT=/opt/venv \
+    uv sync --frozen --no-install-project --no-dev \
     --link-mode copy \
-    --compile-bytecode \
-    --venv /opt/venv
+    --compile-bytecode
 
 
 # ==========================================
