@@ -6,6 +6,7 @@
 **/__pycache__
 *.pyc
 venv/
+.venv/
 env/
 .env
 
@@ -38,3 +39,6 @@ backend/identity_storage
 
 #aider configs
 .aider*
+
+#uv files
+uv.lock
