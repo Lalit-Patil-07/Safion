@@ -22,11 +22,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
-RUN python3 -m venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
+# Install uv
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
-COPY backend/requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cu128
+# Copy dependency files — uv needs both to resolve the lock
+COPY pyproject.toml uv.lock ./
+
+# Create the venv at /opt/venv, then sync into it
+# UV_PROJECT_ENVIRONMENT tells uv sync which venv to target
+RUN uv venv /opt/venv --python /usr/local/bin/python3
+
+RUN UV_PROJECT_ENVIRONMENT=/opt/venv \
+    uv sync --frozen --no-install-project --no-dev \
+    --link-mode copy \
+    --compile-bytecode
 
 
 # ==========================================
@@ -47,9 +56,7 @@ COPY backend/ ./
 COPY --from=frontend-builder /app/frontend /app/frontend
 COPY best.pt /app/best.pt
 
-# ADDED: entrypoint handles .env loading, DB readiness, and Gunicorn startup
 COPY scripts/entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 
-# CHANGED: was `CMD ["python3", "run.py"]`
 CMD ["/app/entrypoint.sh"]

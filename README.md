@@ -81,6 +81,7 @@ Open `http://localhost:5000`.
 | Requirement | Version |
 |---|---|
 | Python | 3.10+ |
+| uv | latest — `pip install uv` or see [uv docs](https://docs.astral.sh/uv/getting-started/installation/) |
 | Node.js | 18+ |
 | PostgreSQL | **18 exactly** |
 | pgvector | system extension (see step 1 — **not a pip package**) |
@@ -107,12 +108,6 @@ sudo -u postgres psql -c \
 ```
 A row must appear. If it does not, the extension install failed — do not proceed.
 
-**Run the setup script manually:**
-```bash
-bash scripts/setup_db.sh
-```
-This is required for local development to create the database user, database, grants privileges, and enable the `vector` extension.
-
 ---
 
 #### 2. Configure environment
@@ -131,7 +126,7 @@ cp .env.example .env
 bash scripts/setup_db.sh
 ```
 
-Creates the PostgreSQL user, database, grants privileges, and enables the `vector` extension. Fully idempotent. This step must be run manually for local development.
+Creates the PostgreSQL user, database, grants privileges, and enables the `vector` extension. Fully idempotent.
 
 If the `postgres` superuser has a password:
 ```bash
@@ -142,69 +137,17 @@ PGPASSWORD=your_postgres_password bash scripts/setup_db.sh
 
 #### 4. Install Python dependencies
 
-`torch` is declared in `backend/requirements.txt` — no separate install step is needed.
-
-**CPU-only:**
 ```bash
-python -m venv venv
-source venv/bin/activate
-pip install -r backend/requirements.txt
+uv sync
 ```
 
-**GPU (CUDA 12.8 Requirement):**
-```bash
-python -m venv venv
-source venv/bin/activate
-pip install -r backend/requirements.txt --index-url https://download.pytorch.org/whl/cu128
-```
+`uv` reads `pyproject.toml`, resolves `torch`, `torchvision`, and `torchaudio` from the CUDA 12.8 PyTorch wheel index, and installs `onnxruntime-gpu` for GPU-accelerated InsightFace inference — no extra flags needed. The virtual environment is created at `.venv/` in the project root.
 
-> The `--index-url` flag resolves `torch`, `torchvision`, and `torchaudio` from the
-> cu128 wheel index. All other packages are fetched from PyPI as normal.
-
----
-
-#### ONNXRuntime Setup (CPU vs GPU)
-
-> ⚠️ **`torch` and `onnxruntime-gpu` must both target the same CUDA major version.**
-> A mismatch (e.g. torch cu128 + ort built for cu11) causes `libcublasLt.so.12 not found`
-> and silent fallback to CPU with no error message.
-
-**This project explicitly targets CUDA 12.8.** Both torch (cu128) and onnxruntime-gpu (CUDA 12.x build
-from PyPI) are aligned to CUDA 12. Install CUDA 12.8 from the
-[NVIDIA CUDA Archive](https://developer.nvidia.com/cuda-12-8-0-download-archive) before
-setting up the GPU environment.
-
-The CPU and GPU `onnxruntime` builds install under the same module name. **Never install
-both** in the same environment — uninstall one before switching.
-
-**Default (CPU):** `backend/requirements.txt` ships with `onnxruntime` (CPU) active.
-
-**To switch to GPU:**
-
-1. Open `backend/requirements.txt` and swap the active line:
-   ```
-   # comment this out:
-   onnxruntime>=1.24.0
-
-   # uncomment this:
-   onnxruntime-gpu>=1.24.0
-   ```
-
-2. Reinstall cleanly:
-   ```bash
-   pip uninstall -y onnxruntime onnxruntime-gpu
-   pip install -r backend/requirements.txt --index-url https://download.pytorch.org/whl/cu128
-   ```
-
-3. Verify GPU is active:
-   ```bash
-   python -c "import torch; import onnxruntime; print(onnxruntime.get_available_providers())"
-   # Expected: ['CUDAExecutionProvider', 'CPUExecutionProvider']
-   ```
-   Or check the app startup log for:
-   ```
-   InsightFace loaded — active session providers: ['CUDAExecutionProvider']
-   ```
+> **Verify GPU providers after install:**
+> ```bash
+> uv run python -c "import torch; import onnxruntime; print(onnxruntime.get_available_providers())"
+> # Expected: ['CUDAExecutionProvider', 'CPUExecutionProvider']
+> ```
 
 Also ensure `PREFER_GPU=true` is set in your `.env`.
 
@@ -222,7 +165,7 @@ cd frontend && npm install
 
 **Backend** (from project root):
 ```bash
-python backend/run.py
+uv run python backend/run.py
 ```
 
 **Frontend** (separate terminal):
@@ -259,8 +202,7 @@ ppe-detection-system/
 │   ├── face/                   # InsightFace pipeline, identity models, clustering
 │   ├── streams/                # Stream manager, worker, IoU tracker
 │   ├── tasks/                  # Async violation queue
-│   ├── violations/             # Violation log routes
-│   └── requirements.txt        # Python dependencies
+│   └── violations/             # Violation log routes
 ├── frontend/
 │   ├── src/App.js              # React application
 │   └── package.json
@@ -270,6 +212,7 @@ ppe-detection-system/
 ├── best.pt                     # Trained YOLOv11m model weights
 ├── docker-compose.yml
 ├── Dockerfile
+├── pyproject.toml              # Python dependencies + uv configuration
 └── .env.example
 ```
 

@@ -1,0 +1,62 @@
+[project]
+name = "safion"
+version = "0.1.0"
+description = "Real-time PPE Detection System"
+requires-python = ">=3.10"
+dependencies = [
+    # Web framework
+    "flask>=3.0.0",
+    "flask-sqlalchemy>=3.1.0",
+    "flask-bcrypt>=1.0.1",
+    "flask-jwt-extended>=4.6.0",
+
+    # PyTorch (CUDA 12.8) — resolved from the pytorch-cu128 index via [tool.uv.sources]
+    "torch>=2.7.0",
+    "torchvision>=0.22.0",
+    "torchaudio>=2.7.0",
+
+    # YOLO
+    "ultralytics>=8.0.0",
+
+    # Computer vision
+    "opencv-python-headless>=4.9.0",
+
+    # Face recognition — InsightFace (buffalo_l: RetinaFace + ArcFace)
+    "insightface>=0.7.3",
+
+    # ONNXRuntime — GPU only (CUDA 12.x build, aligns with torch cu128)
+    # Never install onnxruntime (CPU) alongside this; they share the same module name.
+    "onnxruntime-gpu>=1.24.0",
+
+    # Clustering
+    "scikit-learn>=1.4.0",
+
+    # Numerics
+    "numpy>=1.26.0",
+
+    # Database — PostgreSQL driver
+    # pgvector is NOT installed via pip — it is a PostgreSQL system-level extension.
+    # See scripts/install_postgres.sh for system-level installation.
+    "psycopg2-binary>=2.9.0",
+    "pgvector>=0.2.0",
+
+    # WSGI server (production)
+    "gunicorn>=21.2.0",
+]
+
+# ---------------------------------------------------------------------------
+# PyTorch CUDA 12.8
+# ---------------------------------------------------------------------------
+# torch/torchvision/torchaudio are pinned to the cu128 wheel index so uv
+# always installs cu128 builds, which bundle libcublasLt.so.12 and preload
+# it on `import torch` — making it available to onnxruntime-gpu automatically.
+# ---------------------------------------------------------------------------
+[tool.uv.sources]
+torch = [{ index = "pytorch-cu128" }]
+torchvision = [{ index = "pytorch-cu128" }]
+torchaudio = [{ index = "pytorch-cu128" }]
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
