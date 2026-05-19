@@ -1,0 +1,28 @@
+target_classes:
+  - id: 1
+    name: Mask
+    min_augmented_images: 300
+  - id: 9
+    name: Vehicle
+    min_augmented_images: 300
+  - id: 6
+    name: Safety Cone
+    min_augmented_images: 200
+
+exclude_from_source:
+  - 5
+  - 8
+
+transforms:
+  horizontal_flip: true
+  brightness: true
+  rotation: false
+
+split_ratios:
+  train: 0.80
+  valid: 0.15
+  test: 0.05
+
+jsd_thresholds:
+  acceptable: 0.10
+  excellent: 0.05
