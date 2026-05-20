@@ -59,4 +59,8 @@ COPY best.pt /app/best.pt
 COPY scripts/entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 
+RUN useradd --create-home --shell /bin/bash appuser && \
+    chown -R appuser:appuser /app
+USER appuser
+
 CMD ["/app/entrypoint.sh"]

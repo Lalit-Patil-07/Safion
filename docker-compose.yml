@@ -32,7 +32,7 @@ services:
     volumes:
       - ./.env:/app/.env:ro
       - safion_identity:/app/backend/identity_storage
-      - safion_insightface:/root/.insightface
+      - safion_insightface:/home/appuser/.insightface
       - safion_data:/app/backend/violations_images
       - safion_temp:/app/backend/temp
     depends_on:
