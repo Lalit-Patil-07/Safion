@@ -15,8 +15,12 @@ from flask_jwt_extended import (
     jwt_required,
     get_jwt_identity,
     get_jwt,
+    set_access_cookies,
+    set_refresh_cookies,
+    unset_jwt_cookies,
+    get_csrf_token,
 )
-from extensions import db
+from extensions import db, limiter
 from auth.models import User
 from auth.utils import hash_password, verify_password
 
@@ -43,6 +47,7 @@ def _validate_registration_payload(data: dict) -> str | None:
 
 
 @auth_bp.post("/register")
+@limiter.limit("3/hour")
 def register():
     data = request.get_json(silent=True) or {}
 
@@ -76,6 +81,7 @@ def register():
 
 
 @auth_bp.post("/login")
+@limiter.limit("5/minute")
 def login():
     data = request.get_json(silent=True) or {}
     identifier = (data.get("email") or data.get("username") or "").strip()
@@ -105,14 +111,17 @@ def login():
         identity=user.id, additional_claims=additional_claims
     )
 
-    return jsonify({
-        "access_token": access_token,
-        "refresh_token": refresh_token,
+    response = jsonify({
         "user": user.to_dict(),
-    }), 200
+        "csrf_token": get_csrf_token(access_token),
+    })
+    set_access_cookies(response, access_token)
+    set_refresh_cookies(response, refresh_token)
+    return response, 200
 
 
 @auth_bp.post("/refresh")
+@limiter.limit("10/minute")
 @jwt_required(refresh=True)
 def refresh():
     identity = get_jwt_identity()
@@ -126,7 +135,16 @@ def refresh():
     access_token = create_access_token(
         identity=identity, additional_claims=additional_claims
     )
-    return jsonify({"access_token": access_token}), 200
+    response = jsonify({"csrf_token": get_csrf_token(access_token)})
+    set_access_cookies(response, access_token)
+    return response, 200
+
+
+@auth_bp.post("/logout")
+def logout():
+    response = jsonify({"message": "Logged out."})
+    unset_jwt_cookies(response)
+    return response, 200
 
 
 @auth_bp.get("/me")

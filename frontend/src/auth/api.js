@@ -1,17 +1,27 @@
-// Patches global fetch to attach Authorization header on every non-auth request.
+// Patches global fetch to send cookies and CSRF headers on every request.
 // Import once (in index.js) as a side-effect — no other files need changing.
 
 const _originalFetch = window.fetch.bind(window);
 
-window.fetch = async (url, options = {}) => {
-  const isAuthRoute = typeof url === 'string' && url.includes('/api/v1/auth/');
+function getCookie(name) {
+  const match = document.cookie.match(new RegExp('(^| )' + name + '=([^;]+)'));
+  return match ? match[2] : null;
+}
 
-  if (!isAuthRoute) {
-    const token = localStorage.getItem('access_token');
-    if (token) {
-      options = {
-        ...options,
-        headers: { Authorization: `Bearer ${token}`, ...options.headers },
+window.fetch = async (url, options = {}) => {
+  // Always include credentials so httpOnly cookies are sent
+  options.credentials = options.credentials || 'include';
+
+  const isAuthRoute = typeof url === 'string' && url.includes('/api/v1/auth/');
+  const isSafeMethod = !options.method || options.method === 'GET' || options.method === 'HEAD';
+
+  // Add CSRF header for state-changing requests to non-auth routes
+  if (!isAuthRoute && !isSafeMethod) {
+    const csrfToken = getCookie('csrf_access_token');
+    if (csrfToken) {
+      options.headers = {
+        'X-CSRF-Token': csrfToken,
+        ...options.headers,
       };
     }
   }
