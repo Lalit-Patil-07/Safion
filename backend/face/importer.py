@@ -144,6 +144,11 @@ def _extract_identities_from_zip(zip_path: str, temp_dir: str) -> List[Dict[str,
     """Extract identity folders from a ZIP and return their file listings."""
     identities = []
     with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+        temp_real = os.path.realpath(temp_dir)
+        for member in zip_ref.infolist():
+            target = os.path.realpath(os.path.join(temp_dir, member.filename))
+            if not target.startswith(temp_real + os.sep) and target != temp_real:
+                raise ValueError(f"Unsafe path in ZIP: {member.filename}")
         zip_ref.extractall(temp_dir)
 
         for root, dirs, files in os.walk(temp_dir):
