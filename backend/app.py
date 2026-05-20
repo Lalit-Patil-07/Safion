@@ -1,5 +1,12 @@
 """
-Safion — Flask application factory
+Safion — Flask application factory.
+
+Creates and configures the Flask app, initialises extensions (SQLAlchemy,
+bcrypt, JWT), registers blueprints, and starts background services
+(YOLO, InsightFace, stream manager, task queue).
+
+The factory follows the ``create_app()`` pattern so the app can be
+imported by Gunicorn, tests, and CLI scripts without side effects.
 """
 import logging
 import os
@@ -31,8 +38,6 @@ def create_app(config_class=Config, config_overrides=None) -> Flask:
     _register_frontend_catch_all(app)
     _register_error_handlers(app)
 
-    # CHANGED: was `if not app.config.get("_SKIP_SERVICES", False): _init_services(app)`
-    #
     # Skip in test mode — TestConfig sets TESTING=True.  Tests create the schema
     # themselves in their fixtures and do not need GPU services running.
     # In all other contexts (Docker via entrypoint.sh, local dev via run.py)

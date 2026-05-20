@@ -1,3 +1,9 @@
+"""
+Application configuration from environment variables.
+
+All required settings use ``_require()`` which raises RuntimeError on
+missing values, failing fast at startup rather than at first use.
+"""
 import os
 from datetime import timedelta
 

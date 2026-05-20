@@ -1,5 +1,4 @@
-# Safion - backend/face/importer.py
-
+"""Face identity importer — bulk enrolment from ZIP archives."""
 import os
 import zipfile
 import tempfile
@@ -123,6 +122,11 @@ def _embed_face_crop(image_bgr: np.ndarray, pipeline) -> Optional[dict]:
 
 
 def run_import(zip_bytes: bytes, pipeline, config, max_mb: int = 100) -> Dict[str, Any]:
+    """Import face identities from a ZIP archive.
+
+    Expects a directory structure: ``<IdentityName>/photo1.jpg, photo2.jpg, ...``.
+    Each subdirectory becomes a confirmed identity with pre-computed embeddings.
+    """
     max_bytes = max_mb * 1024 * 1024
     if len(zip_bytes) > max_bytes:
         raise ValueError(f"ZIP file exceeds maximum size of {max_mb}MB")
@@ -137,6 +141,7 @@ def run_import(zip_bytes: bytes, pipeline, config, max_mb: int = 100) -> Dict[st
 
 
 def _extract_identities_from_zip(zip_path: str, temp_dir: str) -> List[Dict[str, Any]]:
+    """Extract identity folders from a ZIP and return their file listings."""
     identities = []
     with zipfile.ZipFile(zip_path, 'r') as zip_ref:
         zip_ref.extractall(temp_dir)
@@ -154,6 +159,7 @@ def _extract_identities_from_zip(zip_path: str, temp_dir: str) -> List[Dict[str,
 
 
 def _process_identity_folder(identity_folder: str) -> List[Tuple[str, str]]:
+    """Return ``(path, filename)`` tuples for valid image files in a folder."""
     faces = []
     for file in os.listdir(identity_folder):
         if not file.lower().endswith(('.png', '.jpg', '.jpeg')):
@@ -173,6 +179,7 @@ def _import_identities(
     pipeline,
     config,
 ) -> Dict[str, Any]:
+    """Embed images and create confirmed identities in the database."""
     total_identities  = 0
     total_faces       = 0
     failed_identities = 0

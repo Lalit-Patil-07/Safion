@@ -1,6 +1,10 @@
 """
-Face + Identity API
+Face and identity API endpoints.
+
 Prefix: /face
+
+Provides CRUD for face identities, merge suggestions, clustering triggers,
+enrollment from photos, and bulk import from ZIP archives.
 """
 import os
 from datetime import datetime, timezone, timedelta

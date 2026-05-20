@@ -1,3 +1,12 @@
+"""
+Violation log API endpoints.
+
+Prefix: /violations
+
+Provides paginated violation listing, image serving, and bulk clear.
+The violation image endpoint is exempted from JWT auth for direct
+``<img src>`` embedding in the frontend.
+"""
 import os
 
 from flask import Blueprint, request, jsonify, send_from_directory, current_app

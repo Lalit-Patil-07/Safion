@@ -1,3 +1,10 @@
+"""Video stream management API endpoints.
+
+Prefix: /stream
+
+Provides stream start/stop, status listing, and MJPEG video feed.
+The video feed endpoint is exempted from JWT auth for ``<img src>`` embedding.
+"""
 import os
 import uuid
 

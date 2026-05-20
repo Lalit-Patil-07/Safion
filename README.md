@@ -192,7 +192,7 @@ Opens at `http://localhost:3000`.
 ## 📂 Project Structure
 
 ```
-ppe-detection-system/
+Safion/
 ├── backend/
 │   ├── app.py                  # Flask application factory
 │   ├── run.py                  # Development entry point
@@ -202,14 +202,21 @@ ppe-detection-system/
 │   ├── face/                   # InsightFace pipeline, identity models, clustering
 │   ├── streams/                # Stream manager, worker, IoU tracker
 │   ├── tasks/                  # Async violation queue
-│   └── violations/             # Violation log routes
+│   ├── violations/             # Violation log routes
+│   ├── middleware/              # Auth decorators and blueprint guards
+│   └── tests/                  # Unit tests
 ├── frontend/
 │   ├── src/App.js              # React application
 │   └── package.json
+├── model_train/
+│   ├── scripts/                # Training, evaluation, data preparation
+│   └── config/                 # Training hyperparameters and data config
 ├── scripts/
 │   ├── install_postgres.sh     # Installs PostgreSQL 18 + pgvector (run once, as root)
-│   └── setup_db.sh             # Creates DB user, database, enables extension
-├── best.pt                     # Trained YOLOv11m model weights
+│   ├── setup_db.sh             # Creates DB user, database, enables extension
+│   └── entrypoint.sh           # Docker entrypoint (env loading, DB wait, Gunicorn)
+├── design/                     # Design system and logo assets
+├── best.pt                     # Trained YOLO model weights
 ├── docker-compose.yml
 ├── Dockerfile
 ├── pyproject.toml              # Python dependencies + uv configuration
@@ -218,7 +225,7 @@ ppe-detection-system/
 
 ## 🧠 The AI Model
 
-The detection model is a YOLOv11m model trained on a custom dataset for PPE detection. The model detects the following classes:
+The detection model is a YOLO model trained on a custom dataset for PPE detection. The model detects the following classes:
 
 - Hardhat / NO-Hardhat
 - Mask / NO-Mask

@@ -297,7 +297,6 @@ class StreamWorker:
             Thread(target=self._face_worker_loop, daemon=True,
                    name=f"face-{self.stream_id[:8]}").start()
 
-            # ✅ REGISTER ONCE (CORRECT PLACEMENT)
             with _registry_lock:
                 _worker_registry.add(self)
 
@@ -713,10 +712,8 @@ class StreamWorker:
             except queue.Full:
                 pass
 
-            # ADDED: flush buffered violations periodically so they reach the
-            # database during runtime, not only when the stream stops.
-            # _processing_loop had this check but is never called; this is the
-            # active loop, so the timeout flush belongs here.
+            # Flush buffered violations periodically so they reach the DB
+            # during runtime, not only when the stream stops.
             if (time.monotonic() - self._violation_last_flush) >= self._violation_batch_timeout:
                 self._flush_violations()
 

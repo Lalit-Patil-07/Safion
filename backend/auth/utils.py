@@ -1,3 +1,4 @@
+"""Authentication utilities — password hashing and admin bootstrapping."""
 import logging
 import os
 

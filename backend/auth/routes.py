@@ -1,3 +1,11 @@
+"""
+Authentication API endpoints.
+
+Prefix: /api/v1/auth
+
+Provides user registration, login (JWT access + refresh tokens),
+token refresh, and current-user lookup.
+"""
 import re
 
 from flask import Blueprint, request, jsonify, current_app
