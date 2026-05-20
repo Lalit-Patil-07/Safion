@@ -44,6 +44,22 @@ def start_stream():
         if not candidate.startswith(temp_dir):
             return jsonify({"error": "File path must be within the temp directory."}), 400
 
+    if source_type == "rtsp":
+        from urllib.parse import urlparse
+        import ipaddress
+        parsed = urlparse(str(source_path))
+        if parsed.scheme not in ("rtsp", "rtsps"):
+            return jsonify({"error": "RTSP URL must use rtsp:// or rtsps:// scheme."}), 400
+        hostname = parsed.hostname
+        if not hostname:
+            return jsonify({"error": "RTSP URL must have a hostname."}), 400
+        try:
+            ip = ipaddress.ip_address(hostname)
+            if ip.is_private or ip.is_loopback or ip.is_link_local:
+                return jsonify({"error": "RTSP URL must not point to a private or loopback address."}), 400
+        except ValueError:
+            pass  # hostname is a domain name, allow it
+
     try:
         result = _manager().start(source_type, str(source_path), name)
     except ValueError as exc:
