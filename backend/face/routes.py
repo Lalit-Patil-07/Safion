@@ -83,7 +83,8 @@ def list_identities():
     query = FaceIdentity.query.filter_by(is_archived=False)
 
     if search:
-        query = query.filter(FaceIdentity.label.ilike(f"%{search}%"))
+        escaped = search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        query = query.filter(FaceIdentity.label.ilike(f"%{escaped}%", escape="\\"))
     if confirmed == "true":
         query = query.filter_by(is_confirmed=True)
     elif confirmed == "false":
