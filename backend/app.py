@@ -17,6 +17,7 @@ from sqlalchemy import text
 
 from config import Config
 from extensions import db, bcrypt, jwt, limiter
+from flask_jwt_extended import jwt_required
 from version import __version__, VERSION_STRING
 
 
@@ -117,6 +118,11 @@ def _register_blueprints(app):
 def _register_extra_routes(app):
     @app.get("/health")
     def health():
+        return jsonify({"status": "healthy"})
+
+    @app.get("/health/detail")
+    @jwt_required()
+    def health_detail():
         yolo        = app.extensions.get("yolo_service")
         face        = app.extensions.get("face_pipeline")
         task_queue  = app.extensions.get("task_queue")
@@ -150,7 +156,7 @@ def _register_extra_routes(app):
         filename = f"{uuid.uuid4().hex}{ext}"
         save_path = os.path.join(temp_dir, filename)
         video_file.save(save_path)
-        return jsonify({"path": save_path, "filename": filename}), 201
+        return jsonify({"filename": filename}), 201
 
     @app.get("/violators/unknown")
     def get_unknown_violators():
