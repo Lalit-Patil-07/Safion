@@ -1,5 +1,12 @@
 """
-Safion — Flask application factory
+Safion — Flask application factory.
+
+Creates and configures the Flask app, initialises extensions (SQLAlchemy,
+bcrypt, JWT), registers blueprints, and starts background services
+(YOLO, InsightFace, stream manager, task queue).
+
+The factory follows the ``create_app()`` pattern so the app can be
+imported by Gunicorn, tests, and CLI scripts without side effects.
 """
 import logging
 import os
@@ -9,7 +16,8 @@ from flask import Flask, send_from_directory, jsonify, request
 from sqlalchemy import text
 
 from config import Config
-from extensions import db, bcrypt, jwt
+from extensions import db, bcrypt, jwt, limiter
+from flask_jwt_extended import jwt_required
 from version import __version__, VERSION_STRING
 
 
@@ -30,9 +38,8 @@ def create_app(config_class=Config, config_overrides=None) -> Flask:
     _register_extra_routes(app)
     _register_frontend_catch_all(app)
     _register_error_handlers(app)
+    _register_security_headers(app)
 
-    # CHANGED: was `if not app.config.get("_SKIP_SERVICES", False): _init_services(app)`
-    #
     # Skip in test mode — TestConfig sets TESTING=True.  Tests create the schema
     # themselves in their fixtures and do not need GPU services running.
     # In all other contexts (Docker via entrypoint.sh, local dev via run.py)
@@ -60,6 +67,15 @@ def _init_extensions(app):
     bcrypt.init_app(app)
     jwt.init_app(app)
 
+    from flask_cors import CORS
+    CORS(
+        app,
+        origins=app.config.get("CORS_ORIGINS", ["*"]),
+        supports_credentials=app.config.get("CORS_SUPPORTS_CREDENTIALS", True),
+    )
+
+    limiter.init_app(app)
+
     @jwt.unauthorized_loader
     def missing_token(_r): return jsonify({"error": "Authentication required."}), 401
 
@@ -68,6 +84,11 @@ def _init_extensions(app):
 
     @jwt.expired_token_loader
     def expired_token(_h, _d): return jsonify({"error": "Token expired."}), 401
+
+    from flask_jwt_extended.exceptions import CSRFError
+
+    @app.errorhandler(CSRFError)
+    def handle_csrf_error(e): return jsonify({"error": "CSRF token missing or invalid."}), 401
 
     with app.app_context():
         import auth.models   # noqa: F401
@@ -97,6 +118,11 @@ def _register_blueprints(app):
 def _register_extra_routes(app):
     @app.get("/health")
     def health():
+        return jsonify({"status": "healthy"})
+
+    @app.get("/health/detail")
+    @jwt_required()
+    def health_detail():
         yolo        = app.extensions.get("yolo_service")
         face        = app.extensions.get("face_pipeline")
         task_queue  = app.extensions.get("task_queue")
@@ -130,7 +156,7 @@ def _register_extra_routes(app):
         filename = f"{uuid.uuid4().hex}{ext}"
         save_path = os.path.join(temp_dir, filename)
         video_file.save(save_path)
-        return jsonify({"path": save_path, "filename": filename}), 201
+        return jsonify({"filename": filename}), 201
 
     @app.get("/violators/unknown")
     def get_unknown_violators():
@@ -170,6 +196,23 @@ def _register_error_handlers(app):
 
     @app.errorhandler(500)
     def server_error(_e):  return jsonify({"error": "Internal server error."}), 500
+
+
+def _register_security_headers(app):
+    @app.after_request
+    def set_security_headers(response):
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-XSS-Protection"] = "0"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Permissions-Policy"] = (
+            "camera=(), microphone=(), geolocation=()"
+        )
+        if not app.config.get("DEBUG"):
+            response.headers["Strict-Transport-Security"] = (
+                "max-age=31536000; includeSubDomains"
+            )
+        return response
 
 
 def _ensure_admin(app):

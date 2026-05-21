@@ -1,3 +1,9 @@
+"""
+User authentication model.
+
+Single ``users`` table with bcrypt password hashing, role-based access
+(admin/operator), and soft-delete via ``is_active``.
+"""
 import uuid
 from datetime import datetime, timezone
 from sqlalchemy import Index

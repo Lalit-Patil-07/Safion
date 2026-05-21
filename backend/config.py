@@ -1,3 +1,9 @@
+"""
+Application configuration from environment variables.
+
+All required settings use ``_require()`` which raises RuntimeError on
+missing values, failing fast at startup rather than at first use.
+"""
 import os
 from datetime import timedelta
 
@@ -44,6 +50,33 @@ class Config:
         days=int(os.environ.get("JWT_REFRESH_DAYS", "7"))
     )
     JWT_ALGORITHM: str                   = "HS256"
+
+    # ── JWT Cookie ───────────────────────────────────────────────────────────
+    JWT_TOKEN_LOCATION: list = ["cookies"]
+    JWT_ACCESS_COOKIE_NAME: str = "access_token_cookie"
+    JWT_REFRESH_COOKIE_NAME: str = "refresh_token_cookie"
+    JWT_COOKIE_SECURE: bool = os.environ.get("JWT_COOKIE_SECURE", "false").lower() == "true"
+    JWT_COOKIE_SAMESITE: str = os.environ.get("JWT_COOKIE_SAMESITE", "Lax")
+    JWT_COOKIE_DOMAIN: str = os.environ.get("JWT_COOKIE_DOMAIN", "") or None
+    JWT_SESSION_COOKIE: bool = False
+
+    # ── CSRF (double-submit cookie via flask-jwt-extended) ────────────────────
+    JWT_COOKIE_CSRF_PROTECT: bool = True
+    JWT_CSRF_IN_COOKIES: bool = True
+    JWT_ACCESS_CSRF_HEADER_NAME: str = "X-CSRF-Token"
+    JWT_REFRESH_CSRF_HEADER_NAME: str = "X-CSRF-Token"
+
+    # ── CORS ─────────────────────────────────────────────────────────────────
+    CORS_ORIGINS: list = (
+        os.environ.get("CORS_ORIGINS", "").split(",")
+        if os.environ.get("CORS_ORIGINS")
+        else ["*"]
+    )
+    CORS_SUPPORTS_CREDENTIALS: bool = True
+
+    # ── Rate Limiting ────────────────────────────────────────────────────────
+    RATELIMIT_DEFAULT: str = os.environ.get("RATELIMIT_DEFAULT", "200/minute")
+    RATELIMIT_STORAGE_URI: str = os.environ.get("RATELIMIT_STORAGE_URI", "memory://")
 
     # ── File Storage ──────────────────────────────────────────────────────────
     VIOLATIONS_IMAGE_DIR: str = os.environ.get(

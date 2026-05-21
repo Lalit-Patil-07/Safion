@@ -7,18 +7,16 @@ export function AuthProvider({ children }) {
     try { return JSON.parse(localStorage.getItem('user')); } catch { return null; }
   });
 
-  const isAuthenticated = !!user && !!localStorage.getItem('access_token');
+  const isAuthenticated = !!user;
 
   const login = useCallback((data) => {
-    localStorage.setItem('access_token', data.access_token);
-    localStorage.setItem('refresh_token', data.refresh_token);
     localStorage.setItem('user', JSON.stringify(data.user));
     setUser(data.user);
   }, []);
 
   const logout = useCallback(() => {
-    localStorage.removeItem('access_token');
-    localStorage.removeItem('refresh_token');
+    fetch('/api/v1/auth/logout', { method: 'POST', credentials: 'include' })
+      .catch(() => {});
     localStorage.removeItem('user');
     setUser(null);
   }, []);

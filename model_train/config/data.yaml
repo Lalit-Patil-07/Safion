@@ -1,0 +1,16 @@
+path: /root/Safion/model_train/data_prepared
+train: train/images
+val: valid/images
+test: test/images
+nc: 10
+names:
+  - Hardhat
+  - Mask
+  - NO-Hardhat
+  - NO-Mask
+  - NO-Safety Vest
+  - Person
+  - Safety Cone
+  - Safety Vest
+  - Machinery
+  - Vehicle

@@ -15,6 +15,8 @@ class TestConfig(Config):
     SECRET_KEY = "test-secret"
     # Disable service init for unit tests
     _SKIP_SERVICES = True
+    # Disable rate limiting in tests
+    RATELIMIT_ENABLED = False
 
 
 @pytest.fixture()
@@ -74,12 +76,16 @@ class TestLogin:
     def _register(self, client, username="alice", password="pass1234"):
         client.post("/api/v1/auth/register", json={"username": username, "password": password})
 
-    def test_valid_login_returns_tokens(self, client):
+    def test_valid_login_sets_cookies(self, client):
         self._register(client)
         r = client.post("/api/v1/auth/login", json={"username": "alice", "password": "pass1234"})
         assert r.status_code == 200
-        assert "access_token" in r.json
-        assert "refresh_token" in r.json
+        assert "user" in r.json
+        assert "csrf_token" in r.json
+        # Verify cookies are set
+        cookies = {c.name for c in client.cookie_jar}
+        assert "access_token_cookie" in cookies
+        assert "refresh_token_cookie" in cookies
 
     def test_wrong_password_rejected(self, client):
         self._register(client)
@@ -99,28 +105,22 @@ class TestLogin:
 # Protected routes
 # ---------------------------------------------------------------------------
 class TestProtectedRoutes:
-    def _get_token(self, client):
+    def _login(self, client):
         client.post("/api/v1/auth/register", json={"username": "alice", "password": "pass1234"})
-        r = client.post("/api/v1/auth/login", json={"username": "alice", "password": "pass1234"})
-        return r.json["access_token"]
+        client.post("/api/v1/auth/login", json={"username": "alice", "password": "pass1234"})
 
     def test_me_requires_auth(self, client):
         r = client.get("/api/v1/auth/me")
         assert r.status_code == 401
 
     def test_me_returns_user_info(self, client):
-        token = self._get_token(client)
-        r = client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"})
+        self._login(client)
+        r = client.get("/api/v1/auth/me")
         assert r.status_code == 200
         assert r.json["username"] == "alice"
 
-    def test_refresh_returns_new_access_token(self, client):
-        client.post("/api/v1/auth/register", json={"username": "alice", "password": "pass1234"})
-        login = client.post("/api/v1/auth/login", json={"username": "alice", "password": "pass1234"})
-        refresh_token = login.json["refresh_token"]
-        r = client.post(
-            "/api/v1/auth/refresh",
-            headers={"Authorization": f"Bearer {refresh_token}"},
-        )
+    def test_refresh_returns_new_csrf_token(self, client):
+        self._login(client)
+        r = client.post("/api/v1/auth/refresh")
         assert r.status_code == 200
-        assert "access_token" in r.json
+        assert "csrf_token" in r.json

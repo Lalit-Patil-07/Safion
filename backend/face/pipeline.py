@@ -1,3 +1,20 @@
+"""
+InsightFace pipeline — face embedding, identity matching, and prototype cache.
+
+Thread safety
+-------------
+A module-level singleton ``_insight_app`` (InsightFace FaceAnalysis) is
+protected by ``_insight_lock``.  The per-instance prototype cache uses an
+internal ``_RWLock`` for concurrent read access during matching and
+exclusive write access during cache updates.
+
+Key components
+--------------
+- ``InsightFacePipeline`` — main entry point for embedding and matching
+- ``_build_prototypes()`` — quality-weighted prototype construction
+- ``_proto_max_similarity()`` — best-match scoring against prototype sets
+- ``_RWLock`` — lightweight readers-writer lock for the cache
+"""
 from __future__ import annotations
 
 import logging
@@ -51,6 +68,11 @@ class _RWLock:
 
 
 def compute_quality_score(det_score: float, bbox: list, image_shape: tuple) -> float:
+    """Blend detection confidence with face-area ratio for a composite quality score.
+
+    The area component rewards larger faces (easier to align) and is capped at
+    15 % of the image area.  Final score is clipped to [0, 1].
+    """
     if not bbox or len(bbox) < 4 or not image_shape:
         return float(det_score)
 
@@ -67,6 +89,13 @@ def _build_prototypes(
     max_k: int,
     merge_threshold: float,
 ) -> list[dict]:
+    """Build quality-weighted prototypes from embedding rows.
+
+    Rows are sorted by quality (descending).  Each row is either merged into
+    the most similar existing prototype (if similarity >= ``merge_threshold``)
+    or added as a new prototype (if capacity allows).  When full, the
+    lowest-weight prototype is replaced if the new row has higher quality.
+    """
     rows_sorted = sorted(rows, key=lambda r: r.quality_score or 0.0, reverse=True)
     prototypes: list[dict] = []
 
@@ -103,6 +132,7 @@ def _proto_max_similarity(
     label: str = "",
     identity_id: str = "",
 ) -> float:
+    """Return the highest cosine similarity between ``query`` and any prototype."""
     if not prototypes:
         return 0.0
 
@@ -130,6 +160,11 @@ def _update_prototypes(
     max_k: int,
     merge_threshold: float,
 ) -> None:
+    """Incrementally update a prototype set with a new embedding.
+
+    Merges into the best match if similarity >= ``merge_threshold``,
+    appends if capacity allows, or replaces the weakest prototype.
+    """
     if not prototypes:
         prototypes.append({"vec": new_emb.copy(), "weight": quality, "count": 1})
         return
@@ -159,6 +194,7 @@ def _update_prototypes(
 
 
 def _temporal_bonus(data: dict, recent_window: float, boost: float) -> float:
+    """Return a similarity boost if the identity was seen within ``recent_window`` seconds."""
     last_seen = data.get("last_seen", 0.0)
     if last_seen and (time.time() - last_seen) < recent_window:
         return boost
@@ -171,6 +207,7 @@ def _log_top_candidates(
     threshold: float,
     n: int = 3,
 ) -> None:
+    """Log the top-N identity candidates for ``query`` at DEBUG level."""
     if not logger.isEnabledFor(logging.DEBUG) or not cache:
         return
 
@@ -310,7 +347,6 @@ class InsightFacePipeline:
             logger.warning("InsightFace.get() error: %s", exc)
             return []
 
-        # Log number of detected faces before filtering
         logger.debug("embed_crop: detected %d faces", len(faces))
 
         results = []
@@ -373,7 +409,6 @@ class InsightFacePipeline:
             logger.warning("embed_person_crop Stage-1 error: %s", exc)
             return []
 
-        # Log number of Stage-1 faces detected
         logger.debug("embed_person_crop: Stage-1 detection found %d faces", len(stage1_faces))
 
         if not stage1_faces:
@@ -422,11 +457,10 @@ class InsightFacePipeline:
             int(_TARGET_FACE_PX * (640.0 / new_h)),
         )
 
-        # ── Stage 2: embed the normalized crop ──────────────────────────────────────
+        # ── Stage 2: embed the normalized crop ──────────────────────────────
         stage2_results = self.embed_crop(normalized_crop)
         logger.debug("embed_person_crop: Stage-2 embedding returned %d faces", len(stage2_results))
 
-        # If Stage-2 embedding returns no results, fallback to raw embedding
         if not stage2_results:
             logger.debug("embed_person_crop: Stage-2 embedding failed - falling back to raw embed_crop")
             result = self.embed_crop(person_crop_bgr)
@@ -437,6 +471,7 @@ class InsightFacePipeline:
         return stage2_results
 
     def reload_cache(self) -> int:
+        """Rebuild the in-memory identity cache from the database."""
         from face.models import FaceIdentity
 
         identities = FaceIdentity.query.filter_by(is_archived=False).all()
@@ -479,6 +514,8 @@ class InsightFacePipeline:
         update_prototypes: bool = True,
         is_confirmed: bool = False,
     ) -> None:
+        """Incrementally update a single identity's cache entry without full reload."""
+        from face.models import FaceIdentity
         emb = _unit(new_embedding)
 
         with self._rw.write():
@@ -518,6 +555,14 @@ class InsightFacePipeline:
         qualities: list,
         stream_id: Optional[str] = None,
     ) -> tuple[str, str, float]:
+        """Match a confirmed track's embeddings against the identity cache.
+
+        Averages embeddings (quality-weighted) before matching for more
+        stable identification than single-frame matching.  Falls back to
+        ``match_or_create`` if no cache hit.
+
+        Returns ``(identity_id, label, similarity)``.
+        """
         from face.models import FaceIdentity, FaceEmbedding
         from extensions import db
 
@@ -632,6 +677,10 @@ class InsightFacePipeline:
         quality: float,
         stream_id: Optional[str] = None,
     ) -> tuple[str, str, float]:
+        """Match a single embedding against the cache or create a new identity.
+
+        Returns ``(identity_id, label, similarity)``.
+        """
         from face.models import FaceIdentity, FaceEmbedding
         from extensions import db
 

@@ -1,3 +1,10 @@
+"""Video stream management API endpoints.
+
+Prefix: /stream
+
+Provides stream start/stop, status listing, and MJPEG video feed.
+The video feed endpoint is exempted from JWT auth for ``<img src>`` embedding.
+"""
 import os
 import uuid
 
@@ -27,7 +34,7 @@ def start_stream():
     if source_type == "video":
         source_type = "file"
 
-    allowed_types = {"webcam", "rtsp", "file"}
+    allowed_types = {"rtsp", "file"}
     if source_type not in allowed_types:
         return jsonify({"error": f"source_type must be one of: {allowed_types}"}), 400
 
@@ -36,6 +43,22 @@ def start_stream():
         candidate = os.path.realpath(source_path)
         if not candidate.startswith(temp_dir):
             return jsonify({"error": "File path must be within the temp directory."}), 400
+
+    if source_type == "rtsp":
+        from urllib.parse import urlparse
+        import ipaddress
+        parsed = urlparse(str(source_path))
+        if parsed.scheme not in ("rtsp", "rtsps"):
+            return jsonify({"error": "RTSP URL must use rtsp:// or rtsps:// scheme."}), 400
+        hostname = parsed.hostname
+        if not hostname:
+            return jsonify({"error": "RTSP URL must have a hostname."}), 400
+        try:
+            ip = ipaddress.ip_address(hostname)
+            if ip.is_private or ip.is_loopback or ip.is_link_local:
+                return jsonify({"error": "RTSP URL must not point to a private or loopback address."}), 400
+        except ValueError:
+            pass  # hostname is a domain name, allow it
 
     try:
         result = _manager().start(source_type, str(source_path), name)

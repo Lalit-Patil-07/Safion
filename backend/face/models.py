@@ -1,3 +1,13 @@
+"""
+Face identity and embedding ORM models.
+
+Tables
+------
+- ``face_identities`` — tracked persons with labels, confirmation state, and metadata
+- ``face_embeddings`` — 512-dim ArcFace vectors (pgvector) linked to identities
+- ``violations`` — PPE violation records with identity linkage and evidence images
+- ``stream_events`` — audit log for track/identity lifecycle events
+"""
 import threading
 import uuid
 from datetime import datetime, timezone
@@ -63,6 +73,7 @@ class FaceIdentity(db.Model):
 
     @staticmethod
     def next_label() -> str:
+        """Generate the next sequential ``Person N`` label (atomic)."""
         from sqlalchemy import text
         result = db.session.execute(
             text(
@@ -74,6 +85,7 @@ class FaceIdentity(db.Model):
 
     @classmethod
     def create_auto(cls) -> "FaceIdentity":
+        """Create an unconfirmed identity with an auto-generated label."""
         with _label_lock:
             label    = cls.next_label()
             identity = cls(label=label, is_confirmed=False, identity_confidence=0.0)
@@ -82,6 +94,7 @@ class FaceIdentity(db.Model):
             return identity
 
     def to_dict(self) -> dict:
+        """Full serialisation including embeddings and violation history."""
         thumbnail = (
             f"/violations/image/{self.thumbnail_filename}"
             if self.thumbnail_filename else None
@@ -102,6 +115,7 @@ class FaceIdentity(db.Model):
         }
 
     def to_summary(self) -> dict:
+        """Lightweight serialisation for list views (no embeddings)."""
         thumbnail = (
             f"/violations/image/{self.thumbnail_filename}"
             if self.thumbnail_filename else None

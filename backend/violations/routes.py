@@ -1,3 +1,12 @@
+"""
+Violation log API endpoints.
+
+Prefix: /violations
+
+Provides paginated violation listing, image serving, and bulk clear.
+The violation image endpoint is exempted from JWT auth for direct
+``<img src>`` embedding in the frontend.
+"""
 import os
 
 from flask import Blueprint, request, jsonify, send_from_directory, current_app
@@ -26,8 +35,9 @@ def get_violations():
     if name_filter:
         # Join to FaceIdentity and filter by label (raw_name no longer exists)
         from face.models import FaceIdentity
+        escaped = name_filter.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         query = query.join(FaceIdentity, Violation.identity_id == FaceIdentity.id, isouter=True)\
-                     .filter(FaceIdentity.label.ilike(f"%{name_filter}%"))
+                     .filter(FaceIdentity.label.ilike(f"%{escaped}%", escape="\\"))
     if stream_filter:
         query = query.filter(Violation.stream_id == stream_filter)
 

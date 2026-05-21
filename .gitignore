@@ -40,3 +40,10 @@ backend/identity_storage
 #aider configs
 .aider*
 
+# Model training - exclude data and outputs, keep config and scripts
+/model_train/data/
+/model_train/data_prepared/
+/model_train/outputs/
+/model_train/*.pt
+/model_train/**/*.pt
+/model_train/**/*.onnx

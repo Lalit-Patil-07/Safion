@@ -1,6 +1,10 @@
 """
-Face + Identity API
+Face and identity API endpoints.
+
 Prefix: /face
+
+Provides CRUD for face identities, merge suggestions, clustering triggers,
+enrollment from photos, and bulk import from ZIP archives.
 """
 import os
 from datetime import datetime, timezone, timedelta
@@ -79,7 +83,8 @@ def list_identities():
     query = FaceIdentity.query.filter_by(is_archived=False)
 
     if search:
-        query = query.filter(FaceIdentity.label.ilike(f"%{search}%"))
+        escaped = search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        query = query.filter(FaceIdentity.label.ilike(f"%{escaped}%", escape="\\"))
     if confirmed == "true":
         query = query.filter_by(is_confirmed=True)
     elif confirmed == "false":
