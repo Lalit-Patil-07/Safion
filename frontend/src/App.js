@@ -235,7 +235,7 @@ const DashboardPage = ({ setView }) => {
         <button onClick={() => setView('monitor')}
                 className="bg-card border border-border rounded-xl p-5 text-left hover:border-primary transition-all">
           <div className="text-base font-semibold text-text mb-1">Start monitoring</div>
-          <div className="text-sm text-text-secondary">Open webcam, RTSP stream, or upload video</div>
+          <div className="text-sm text-text-secondary">Start RTSP stream or upload video</div>
         </button>
       </div>
     </div>
@@ -1220,11 +1220,6 @@ const LiveMonitorPage = ({ activeStreams, stopStream, startStream, serverStatus,
       <div className="flex items-center justify-between mb-5">
         <h2 className="text-2xl font-bold text-text">Live Monitor</h2>
         <div className="flex gap-2">
-          <button onClick={() => startStream('webcam', '0', 'Webcam')}
-                  disabled={serverStatus !== 'connected' || isLoading}
-                  className="flex items-center gap-2 px-3 py-2 bg-primary text-white text-sm rounded-lg hover:opacity-90 disabled:opacity-50">
-            <Camera size={14} /> Webcam
-          </button>
           <button onClick={() => fileInputRef.current?.click()}
                   disabled={serverStatus !== 'connected' || isLoading}
                   className="flex items-center gap-2 px-3 py-2 bg-primary text-white text-sm rounded-lg hover:opacity-90 disabled:opacity-50">
