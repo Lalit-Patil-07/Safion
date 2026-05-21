@@ -95,9 +95,8 @@ PYEOF
 #               do not survive fork into worker processes. Each worker must call
 #               create_app() itself.
 # --threads 4   : allow up to 4 concurrent requests within the single worker
-#                 process. Required for browser_webcam frame POST requests
-#                 (15/s) to be handled alongside polling endpoints without
-#                 queuing up behind each other.
+#                 process. Required for video frame POST requests to be
+#                 handled alongside polling endpoints without queuing.
 #
 # Logs to stdout/stderr so `docker logs` captures everything.
 

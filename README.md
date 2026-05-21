@@ -7,7 +7,7 @@ Safion is a real-time Personal Protective Equipment (PPE) detection system desig
 
 ## ✨ Features
 
-- **Live Multi-stream Detection**: Monitor multiple video feeds simultaneously from webcams, RTSP streams, or pre-recorded video files.
+- **Live Multi-stream Detection**: Monitor multiple video feeds simultaneously from RTSP streams or pre-recorded video files.
 - **Real-time Violation Alerts**: Get instant visual feedback when a safety violation (e.g., "NO-Hardhat", "NO-Mask") is detected.
 - **Comprehensive Violation Log**: Automatically records every violation with a timestamp, violation type, and a cropped image of the individual for evidence.
 - **Identity Recognition**: Anonymously groups images of unknown violators. You can then assign a name to a group of images to track repeat offenders.
