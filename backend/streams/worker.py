@@ -288,7 +288,7 @@ class StreamWorker:
 
     def run(self) -> None:
         import traceback
-        src = int(self.source_path) if self.source_type == "webcam" else self.source_path
+        src = self.source_path
         vs: Optional[VideoStream] = None
 
         try:

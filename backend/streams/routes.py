@@ -34,7 +34,7 @@ def start_stream():
     if source_type == "video":
         source_type = "file"
 
-    allowed_types = {"webcam", "rtsp", "file"}
+    allowed_types = {"rtsp", "file"}
     if source_type not in allowed_types:
         return jsonify({"error": f"source_type must be one of: {allowed_types}"}), 400
 
