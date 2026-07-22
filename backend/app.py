@@ -118,7 +118,11 @@ def _register_blueprints(app):
 def _register_extra_routes(app):
     @app.get("/health")
     def health():
-        return jsonify({"status": "healthy"})
+        yolo = app.extensions.get("yolo_service")
+        return jsonify({
+            "status": "healthy",
+            "model_loaded": yolo.is_loaded if yolo else False,
+        })
 
     @app.get("/health/detail")
     @jwt_required()

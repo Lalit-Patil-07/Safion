@@ -2,8 +2,9 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import ViolationLogPage from "./ViolationLogPage";
 import { useAuth } from './auth/AuthContext';
 import LoginPage from './auth/LoginPage';
+import SafionLogo from './components/SafionLogo';
 import {
-  Camera, Upload, Video, CheckCircle, XCircle, Settings,
+  Upload, Video, CheckCircle, XCircle, Settings,
   Play, StopCircle, Loader, Shield, ShieldOff, ShieldCheck,
   X, Tv, Plus, Trash2, Maximize, Minimize, Users, ChevronLeft,
   ChevronRight, Search, GitMerge, Edit3, Clock, Activity,
@@ -81,31 +82,6 @@ const ImageModal = ({ imageUrl, onClose }) => {
 };
 
 // ── Sidebar ───────────────────────────────────────────────────────────────────
-
-const SafionLogo = ({ className, width, height }) => (
-  <svg width={width} height={height} viewBox="0 0 123 152" className={className}>
-    <rect x="8"  y="8"   width="20" height="20" rx="8" fill="#181826"/>
-    <rect x="37" y="8"   width="20" height="20" rx="8" fill="#F54F00"/>
-    <rect x="66" y="8"   width="20" height="20" rx="8" fill="#F54F00"/>
-    <rect x="95" y="8"   width="20" height="20" rx="8" fill="#F54F00"/>
-    <rect x="8"  y="37"  width="20" height="20" rx="8" fill="#F54F00"/>
-    <rect x="37" y="37"  width="20" height="20" rx="8" fill="#181826"/>
-    <rect x="66" y="37"  width="20" height="20" rx="8" fill="#181826"/>
-    <rect x="95" y="37"  width="20" height="20" rx="8" fill="#181826"/>
-    <rect x="8"  y="66"  width="20" height="20" rx="8" fill="#181826"/>
-    <rect x="37" y="66"  width="20" height="20" rx="8" fill="#F54F00"/>
-    <rect x="66" y="66"  width="20" height="20" rx="8" fill="#F54F00"/>
-    <rect x="95" y="66"  width="20" height="20" rx="8" fill="#181826"/>
-    <rect x="8"  y="95"  width="20" height="20" rx="8" fill="#181826"/>
-    <rect x="37" y="95"  width="20" height="20" rx="8" fill="#181826"/>
-    <rect x="66" y="95"  width="20" height="20" rx="8" fill="#181826"/>
-    <rect x="95" y="95"  width="20" height="20" rx="8" fill="#F54F00"/>
-    <rect x="8"  y="124" width="20" height="20" rx="8" fill="#F54F00"/>
-    <rect x="37" y="124" width="20" height="20" rx="8" fill="#F54F00"/>
-    <rect x="66" y="124" width="20" height="20" rx="8" fill="#F54F00"/>
-    <rect x="95" y="124" width="20" height="20" rx="8" fill="#181826"/>
-  </svg>
-);
 
 const NAV = [
   { id: 'dashboard',   icon: BarChart2,    label: 'Dashboard' },

@@ -47,3 +47,9 @@ backend/identity_storage
 /model_train/*.pt
 /model_train/**/*.pt
 /model_train/**/*.onnx
+
+
+
+.omo/*
+.codegraph/*
+.opencode/*

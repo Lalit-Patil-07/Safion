@@ -797,10 +797,19 @@ class StreamWorker:
         when the track is confirmed.  All mutations to track fields shared with
         the processing loop are performed under track.lock.
 
+        Lock/DB double-check pattern
+        -----------------------------
         The DB call (match_and_store_track) is made OUTSIDE track.lock to avoid
-        holding the lock during I/O.  A double-check guard after re-acquiring
-        the lock prevents two workers from assigning identity to the same track
-        if jobs were queued rapidly (e.g. violation burst).
+        holding the lock during I/O.  After re-acquiring track.lock, a guard
+        checks whether another face-worker thread already assigned an identity
+        to this track while this worker was waiting on the DB.
+
+        …  lock released
+        …  track.identity_id is still None (or our job's candidate)
+        …  if still None → assign (or if we're the last to compute, confidence wins)
+
+        If another worker beat us (identity_id became non‑None), we skip the
+        assignment — preventing duplicate writes and cross‑thread races.
         """
         sid8 = self.stream_id[:8]
 

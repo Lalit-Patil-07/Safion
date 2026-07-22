@@ -67,7 +67,10 @@ class TaskQueue:
         self._q                   = queue.Queue(maxsize=maxsize)
 
         for i in range(n):
-            t = threading.Thread(target=self._loop, name=f"task-worker-{i}", daemon=True)
+            # Non-daemon threads — the main process waits for them during shutdown.
+            # This prevents silent data loss: pending ViolationJoys are drained
+            # before the process exits (see shutdown()).
+            t = threading.Thread(target=self._loop, name=f"task-worker-{i}", daemon=False)
             t.start()
             self._workers.append(t)
         logger.info("TaskQueue: %d workers.", n)
@@ -205,7 +208,23 @@ class TaskQueue:
             logger.error("Auto-consolidation failed: %s", exc, exc_info=True)
 
     def shutdown(self, timeout: float = 5.0) -> None:
+        """Signal workers to stop, drain the queue, then join all threads."""
         self._stop.set()
+
+        # Drain remaining jobs so workers unblock from queue.get()
+        drained = 0
+        while True:
+            try:
+                self._q.get_nowait()
+                self._q.task_done()
+                drained += 1
+            except queue.Empty:
+                break
+        if drained:
+            logger.warning(
+                "TaskQueue shutdown: drained %d unprocessed job(s).", drained,
+            )
+
         for t in self._workers:
             t.join(timeout=timeout)
         logger.info("TaskQueue shut down.")

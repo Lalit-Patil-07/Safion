@@ -16,6 +16,28 @@ def _require(key: str) -> str:
     return val
 
 
+def _require_float(key: str) -> float:
+    """Return the env var as a float, or raise with a readable message."""
+    raw = _require(key)
+    try:
+        return float(raw)
+    except (ValueError, TypeError):
+        raise RuntimeError(
+            f"{key} must be a number (float), got: {raw!r}"
+        ) from None
+
+
+def _require_int(key: str) -> int:
+    """Return the env var as an int, or raise with a readable message."""
+    raw = _require(key)
+    try:
+        return int(raw)
+    except (ValueError, TypeError):
+        raise RuntimeError(
+            f"{key} must be an integer, got: {raw!r}"
+        ) from None
+
+
 class Config:
     # ── Core ──────────────────────────────────────────────────────────────────
     SECRET_KEY: str = _require("SECRET_KEY")
@@ -95,7 +117,7 @@ class Config:
 
     # ── YOLO ──────────────────────────────────────────────────────────────────
     MODEL_PATH: str             = os.environ.get("MODEL_PATH", os.path.join(BASE_DIR, "..", "best.pt"))
-    CONFIDENCE_THRESHOLD: float = float(_require("CONFIDENCE_THRESHOLD"))
+    CONFIDENCE_THRESHOLD: float = _require_float("CONFIDENCE_THRESHOLD")
     YOLO_DEVICE: str            = _require("YOLO_DEVICE")
     YOLO_BATCH_SIZE: int        = int(os.environ.get("YOLO_BATCH_SIZE", "4"))
     YOLO_BATCH_TIMEOUT_MS: int  = int(os.environ.get("YOLO_BATCH_TIMEOUT_MS", "20"))
@@ -103,52 +125,52 @@ class Config:
     # ── InsightFace ───────────────────────────────────────────────────────────
     INSIGHTFACE_MODEL: str          = _require("INSIGHTFACE_MODEL")
     PREFER_GPU: bool                = _require("PREFER_GPU").lower() == "true"
-    IDENTITY_MATCH_THRESHOLD: float = float(_require("IDENTITY_MATCH_THRESHOLD"))
-    EMBEDDING_QUALITY_MIN: float    = float(_require("EMBEDDING_QUALITY_MIN"))
+    IDENTITY_MATCH_THRESHOLD: float = _require_float("IDENTITY_MATCH_THRESHOLD")
+    EMBEDDING_QUALITY_MIN: float    = _require_float("EMBEDDING_QUALITY_MIN")
 
     # ── Multi-prototype identity model ────────────────────────────────────────
-    MAX_PROTOTYPES: int          = int(_require("MAX_PROTOTYPES"))
-    PROTO_MERGE_THRESHOLD: float = float(_require("PROTO_MERGE_THRESHOLD"))
+    MAX_PROTOTYPES: int          = _require_int("MAX_PROTOTYPES")
+    PROTO_MERGE_THRESHOLD: float = _require_float("PROTO_MERGE_THRESHOLD")
 
     # ── Face tracker ─────────────────────────────────────────────────────────
-    TRACK_MIN_FRAMES: int      = int(_require("TRACK_MIN_FRAMES"))
-    TRACK_MAX_LOST: int        = int(_require("TRACK_MAX_LOST"))
-    TRACK_IOU_THRESHOLD: float = float(_require("TRACK_IOU_THRESHOLD"))
-    TRACK_MIN_EMBEDDINGS: int  = int(_require("TRACK_MIN_EMBEDDINGS"))
+    TRACK_MIN_FRAMES: int      = _require_int("TRACK_MIN_FRAMES")
+    TRACK_MAX_LOST: int        = _require_int("TRACK_MAX_LOST")
+    TRACK_IOU_THRESHOLD: float = _require_float("TRACK_IOU_THRESHOLD")
+    TRACK_MIN_EMBEDDINGS: int  = _require_int("TRACK_MIN_EMBEDDINGS")
 
     # ── Merge suggestion engine ───────────────────────────────────────────────
-    SUGGESTION_THRESHOLD: float      = float(_require("SUGGESTION_THRESHOLD"))
-    SIMILARITY_SOFT_THRESHOLD: float = float(_require("SIMILARITY_SOFT_THRESHOLD"))
-    SUGGESTION_MAX_RESULTS: int      = int(_require("SUGGESTION_MAX_RESULTS"))
-    OUTLIER_MIN_SIMILARITY: float    = float(_require("OUTLIER_MIN_SIMILARITY"))
-    FACE_DET_SCORE_MIN: float        = float(_require("FACE_DET_SCORE_MIN"))
+    SUGGESTION_THRESHOLD: float      = _require_float("SUGGESTION_THRESHOLD")
+    SIMILARITY_SOFT_THRESHOLD: float = _require_float("SIMILARITY_SOFT_THRESHOLD")
+    SUGGESTION_MAX_RESULTS: int      = _require_int("SUGGESTION_MAX_RESULTS")
+    OUTLIER_MIN_SIMILARITY: float    = _require_float("OUTLIER_MIN_SIMILARITY")
+    FACE_DET_SCORE_MIN: float        = _require_float("FACE_DET_SCORE_MIN")
 
     # ── Clustering ────────────────────────────────────────────────────────────
-    CLUSTER_EPS: float              = float(_require("CLUSTER_EPS"))
-    CLUSTER_MIN_SAMPLES: int        = int(_require("CLUSTER_MIN_SAMPLES"))
-    CLUSTER_EVERY_N_VIOLATIONS: int = int(_require("CLUSTER_EVERY_N_VIOLATIONS"))
+    CLUSTER_EPS: float              = _require_float("CLUSTER_EPS")
+    CLUSTER_MIN_SAMPLES: int        = _require_int("CLUSTER_MIN_SAMPLES")
+    CLUSTER_EVERY_N_VIOLATIONS: int = _require_int("CLUSTER_EVERY_N_VIOLATIONS")
 
     # ── Stream / Violations ───────────────────────────────────────────────────
-    VIOLATION_COOLDOWN_SECONDS: int  = int(_require("VIOLATION_COOLDOWN"))
-    IDENTITY_VIOLATION_COOLDOWN: int = int(_require("IDENTITY_VIOLATION_COOLDOWN"))
-    STREAM_JPEG_QUALITY: int         = int(_require("STREAM_JPEG_QUALITY"))
-    MAX_CONCURRENT_STREAMS: int      = int(_require("MAX_CONCURRENT_STREAMS"))
-    FRAME_RATE_LIMIT: int            = int(_require("FRAME_RATE_LIMIT"))
-    FACE_EMBED_EVERY_N_FRAMES: int   = int(_require("FACE_EMBED_EVERY_N_FRAMES"))
-    IDENTITY_RECHECK_SECONDS: float = float(_require("IDENTITY_RECHECK_SECONDS"))
-    MAX_PENDING_EMBEDDINGS: int     = int(_require("MAX_PENDING_EMBEDDINGS"))
-    PROCESS_WIDTH: int               = int(_require("PROCESS_WIDTH"))
-    STREAM_OUTPUT_FPS: int           = int(_require("STREAM_OUTPUT_FPS"))
+    VIOLATION_COOLDOWN_SECONDS: int  = _require_int("VIOLATION_COOLDOWN")
+    IDENTITY_VIOLATION_COOLDOWN: int = _require_int("IDENTITY_VIOLATION_COOLDOWN")
+    STREAM_JPEG_QUALITY: int         = _require_int("STREAM_JPEG_QUALITY")
+    MAX_CONCURRENT_STREAMS: int      = _require_int("MAX_CONCURRENT_STREAMS")
+    FRAME_RATE_LIMIT: int            = _require_int("FRAME_RATE_LIMIT")
+    FACE_EMBED_EVERY_N_FRAMES: int   = _require_int("FACE_EMBED_EVERY_N_FRAMES")
+    IDENTITY_RECHECK_SECONDS: float = _require_float("IDENTITY_RECHECK_SECONDS")
+    MAX_PENDING_EMBEDDINGS: int     = _require_int("MAX_PENDING_EMBEDDINGS")
+    PROCESS_WIDTH: int               = _require_int("PROCESS_WIDTH")
+    STREAM_OUTPUT_FPS: int           = _require_int("STREAM_OUTPUT_FPS")
 
     # ── Task Queue ────────────────────────────────────────────────────────────
-    TASK_WORKER_THREADS: int = int(_require("TASK_WORKER_THREADS"))
-    TASK_QUEUE_MAXSIZE: int  = int(_require("TASK_QUEUE_MAXSIZE"))
+    TASK_WORKER_THREADS: int = _require_int("TASK_WORKER_THREADS")
+    TASK_QUEUE_MAXSIZE: int  = _require_int("TASK_QUEUE_MAXSIZE")
 
     # ── Identity temporal bias ───────────────────────────────────────────────
-    TEMPORAL_BOOST: float         = float(_require("TEMPORAL_BOOST"))
-    EMA_ALPHA: float              = float(_require("EMA_ALPHA"))
-    STRONG_MATCH_THRESHOLD: float = float(_require("STRONG_MATCH_THRESHOLD"))
-    RECENT_WINDOW: float          = float(_require("RECENT_WINDOW"))
+    TEMPORAL_BOOST: float         = _require_float("TEMPORAL_BOOST")
+    EMA_ALPHA: float              = _require_float("EMA_ALPHA")
+    STRONG_MATCH_THRESHOLD: float = _require_float("STRONG_MATCH_THRESHOLD")
+    RECENT_WINDOW: float          = _require_float("RECENT_WINDOW")
 
     # ── Pipeline queues ───────────────────────────────────────────────────────
     PROCESS_QUEUE_SIZE: int     = int(os.environ.get("PROCESS_QUEUE_SIZE", "2"))
